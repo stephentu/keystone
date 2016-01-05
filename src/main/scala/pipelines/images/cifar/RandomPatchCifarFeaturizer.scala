@@ -13,11 +13,18 @@ import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 import pipelines.Logging
 import scopt.OptionParser
-import utils.{MatrixUtils, Stats}
+import utils.{MatrixUtils, Stats, Image, ImageUtils}
 
 
 class LabelAugmenter(mult: Int) extends FunctionNode[RDD[Int], RDD[Int]] {
   def apply(in: RDD[Int]) = in.flatMap(x => Seq.fill(mult)(x))
+}
+
+class ImageCrop(xStart: Int, yStart: Int,
+                xEnd: Int, yEnd: Int) extends workflow.Transformer[Image, Image] {
+
+  def apply(img: Image): Image = ImageUtils.crop(img, xStart, yStart, xEnd, yEnd)
+
 }
 
 object RandomPatchCifarFeaturizer extends Serializable with Logging {
@@ -55,12 +62,15 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
     }
 
     val convolver = new Convolver(filters, imageSize, imageSize, numChannels, Some(whitener), true)
+    // TODO(stephentu): currently not flexible
+    assert(convolver.resWidth == 27 && convolver.resHeight == 27)
     val stride = 2
     val windowSize = 19
     val nResulting = (0 until convolver.resWidth - windowSize + 1 by stride)
       .flatMap { _ => (0 until convolver.resHeight - windowSize + 1 by stride).map { _ => 1 } }
       .size
 
+    println(s"convolver.resWidth ${convolver.resWidth} convolver.resHeight ${convolver.resHeight}")
     println(s"nResulting $nResulting")
 
     val pooling = SymmetricRectifier(alpha=conf.alpha)
@@ -82,7 +92,10 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
       label + "," + data.mkString(",")
     }.saveAsTextFile(conf.trainOutfile)
 
-    val testFeatures = convolver.andThen(pooling).apply(testImages)
+    val testFeatures = convolver
+        .andThen(new ImageCrop(4, 4, windowSize + 4, windowSize + 4))
+        .andThen(pooling)
+        .apply(testImages)
     val testLabels = LabelExtractor.andThen(new Cacher[Int]).apply(testData)
 
     testLabels.zip(testFeatures.map(_.toArray)).map { case (label, data) =>
