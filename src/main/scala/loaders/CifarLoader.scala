@@ -10,12 +10,8 @@ import utils.{ImageMetadata, LabeledImage, RowColumnMajorByteArrayVectorizedImag
 /**
  * Loads images from the CIFAR-10 Dataset.
  */
-object CifarLoader {
-  // We hardcode this because these are properties of the CIFAR-10 dataset.
-  val nrow = 32
-  val ncol = 32
+class GeneralCifarLoader(nrow: Int, ncol: Int) {
   val nchan = 3
-
   val labelSize = 1
 
   def cifar10ToBufferedImage(cifar: Array[Byte]): RowColumnMajorByteArrayVectorizedImage = {
@@ -45,8 +41,11 @@ object CifarLoader {
   }
 
   def apply(sc: SparkContext, path: String): RDD[LabeledImage] = {
-    val images = CifarLoader.loadLabeledImages(path)
+    val images = loadLabeledImages(path)
 
     sc.parallelize(images)
   }
 }
+
+// We hardcode this because these are properties of the CIFAR-10 dataset.
+object CifarLoader extends GeneralCifarLoader(32, 32)

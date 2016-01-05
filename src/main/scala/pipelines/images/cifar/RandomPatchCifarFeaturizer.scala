@@ -3,16 +3,22 @@ package pipelines.images.cifar
 import breeze.linalg._
 import breeze.numerics._
 import evaluation.MulticlassClassifierEvaluator
-import loaders.CifarLoader
+import loaders.GeneralCifarLoader
 import nodes.images._
 import nodes.learning.{BlockLeastSquaresEstimator, ZCAWhitener, ZCAWhitenerEstimator}
 import nodes.stats.{StandardScaler, Sampler}
 import nodes.util.{Cacher, ClassLabelIndicatorsFromIntLabels, MaxClassifier}
+import pipelines.FunctionNode
 import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.rdd.RDD
 import pipelines.Logging
 import scopt.OptionParser
 import utils.{MatrixUtils, Stats}
 
+
+class LabelAugmenter(mult: Int) extends FunctionNode[RDD[Int], RDD[Int]] {
+  def apply(in: RDD[Int]) = in.flatMap(x => Seq.fill(mult)(x))
+}
 
 object RandomPatchCifarFeaturizer extends Serializable with Logging {
   val appName = "RandomPatchCifarFeaturizer"
@@ -24,8 +30,10 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
     val numChannels = 3
     val whitenerSize = 100000
 
+    val loader = new GeneralCifarLoader(imageSize, imageSize)
+
     // Load up training data, and optionally sample.
-    val trainData = CifarLoader(sc, conf.trainLocation).cache
+    val trainData = loader(sc, conf.trainLocation).cache()
     val trainImages = ImageExtractor(trainData)
 
     val patchExtractor = new Windower(conf.patchSteps, conf.patchSize)
@@ -46,21 +54,26 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
         ((unnormFilters(::, *) / (twoNorms + 1e-10)) * whitener.whitener.t, whitener)
     }
 
-    val unscaledFeaturizer = new Convolver(filters, imageSize, imageSize, numChannels, Some(whitener), true)
-        .andThen(SymmetricRectifier(alpha=conf.alpha))
+    val convolver = new Convolver(filters, imageSize, imageSize, numChannels, Some(whitener), true)
+    val stride = 2
+    val windowSize = 19
+    val nResulting = (0 until convolver.resWidth - windowSize + 1 by stride)
+      .flatMap { _ => (0 until convolver.resHeight - windowSize + 1 by stride).map { _ => 1 } }
+      .size
+
+    println(s"nResulting $nResulting")
+
+    val pooling = SymmetricRectifier(alpha=conf.alpha)
         .andThen(new Pooler(conf.poolStride, conf.poolSize, identity, _.sum))
         .andThen(ImageVectorizer)
         .andThen(new Cacher[DenseVector[Double]])
+        .andThen(new StandardScaler, trainImages)
+        .andThen(new Cacher[DenseVector[Double]])
 
-    val featurizer = unscaledFeaturizer
-      .andThen(new StandardScaler, trainImages).andThen(new Cacher[DenseVector[Double]])
+    val trainFeatures = pooling(new Windower(stride, windowSize).apply(convolver(trainImages)))
+    val trainLabels = new LabelAugmenter(nResulting).apply(LabelExtractor.apply(trainData)).cache()
 
-    val labelExtractor = LabelExtractor andThen new Cacher[Int]
-
-    val trainFeatures = featurizer(trainImages)
-    val trainLabels = labelExtractor(trainData)
-
-    val testData = CifarLoader(sc, conf.testLocation)
+    val testData = loader(sc, conf.testLocation)
     val testImages = ImageExtractor(testData)
 
     // gotta love spark
@@ -69,8 +82,8 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
       label + "," + data.mkString(",")
     }.saveAsTextFile(conf.trainOutfile)
 
-    val testFeatures = featurizer(testImages)
-    val testLabels = labelExtractor(testData)
+    val testFeatures = convolver.andThen(pooling).apply(testImages)
+    val testLabels = LabelExtractor.andThen(new Cacher[Int]).apply(testData)
 
     testLabels.zip(testFeatures.map(_.toArray)).map { case (label, data) =>
       label + "," + data.mkString(",")
