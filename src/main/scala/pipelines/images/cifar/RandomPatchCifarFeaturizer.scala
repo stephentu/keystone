@@ -77,10 +77,10 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
         .andThen(new Pooler(conf.poolStride, conf.poolSize, identity, _.sum))
         .andThen(ImageVectorizer)
         .andThen(new Cacher[DenseVector[Double]])
-        .andThen(new StandardScaler, trainImages)
-        .andThen(new Cacher[DenseVector[Double]])
+    val trainFeaturesUnscaled: RDD[DenseVector[Double]] = pooling(new Windower(stride, windowSize).apply(convolver(trainImages)))
+    val scaler = (new StandardScaler).fit(trainFeaturesUnscaled).andThen(new Cacher[DenseVector[Double]])
 
-    val trainFeatures = pooling(new Windower(stride, windowSize).apply(convolver(trainImages)))
+    val trainFeatures = scaler(trainFeaturesUnscaled)
     val trainLabels = new LabelAugmenter(nResulting).apply(LabelExtractor.apply(trainData)).cache()
 
     val testData = loader(sc, conf.testLocation)
@@ -95,6 +95,7 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
     val testFeatures = convolver
         .andThen(new ImageCrop(4, 4, windowSize + 4, windowSize + 4))
         .andThen(pooling)
+        .andThen(scaler)
         .apply(testImages)
     val testLabels = LabelExtractor.andThen(new Cacher[Int]).apply(testData)
 
