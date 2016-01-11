@@ -27,8 +27,8 @@ class ImageCrop(xStart: Int, yStart: Int,
 
 }
 
-object RandomPatchCifarFeaturizer extends Serializable with Logging {
-  val appName = "RandomPatchCifarFeaturizer"
+object RandomPatchCifarFeaturizerWithAugmentation extends Serializable with Logging {
+  val appName = "RandomPatchCifarFeaturizerWithAugmentation"
 
   def run(sc: SparkContext, conf: RandomCifarFeaturizerConfig) {
     //Set up some constants.
