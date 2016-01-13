@@ -113,8 +113,8 @@ object RandomPatchCifarFeaturizerWithAugmentation extends Serializable with Logg
       numFilters: Int = 100,
       patchSize: Int = 6,
       patchSteps: Int = 1,
-      poolSize: Int = 14,
-      poolStride: Int = 13,
+      poolSize: Int = 10,
+      poolStride: Int = 9,
       alpha: Double = 0.25,
       imageSize: Int = 32)
 
