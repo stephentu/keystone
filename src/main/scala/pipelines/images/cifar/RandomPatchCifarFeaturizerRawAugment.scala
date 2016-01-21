@@ -36,19 +36,22 @@ object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
     val imageSize = conf.imageSize
     val numChannels = 3
     val whitenerSize = 100000
-    val numRandomPatches = 10
-    val randomPatchSize = 24
+    val numRandomPatchesAugment = conf.numRandomPatchesAugment
+    val augmentRandomPatchSize = 24
 
     val loader = new GeneralCifarLoader(imageSize, imageSize)
 
     // Load up training data, and optionally sample.
     val trainData = loader(sc, conf.trainLocation).cache()
     //Augment data here
-    //flatmap operation on image. Just implement the algorithm.
+    // flatmap operation on image. Just implement the algorithm.
     // use the Keystone Image class _. images utils.scala. don't use the windower. but look at the windower
-    val randomFlipper = new RandomFlips(numRandomPatches, randomPatchSize)
-    
-    val trainImages = ImageExtractor(trainData)
+    val randomFlipper = new RandomFlips(numRandomPatchesAugment, augmentRandomPatchSize)
+
+    val trainImages = ImageExtractor.andThen(new Cacher[Image](Some("trainImages"))).apply(trainData)
+    val trainImageIds = trainImages.zipWithIndex.map(x => x._2.toInt)
+    val trainImageIdsAugmented = new LabelAugmenter(numRandomPatchesAugment).apply(trainImageIds)
+    val trainImagesAugmented = randomFlipper(trainImages)
 
     val patchExtractor = new Windower(conf.patchSteps, conf.patchSize)
       .andThen(ImageVectorizer.apply)
@@ -68,46 +71,39 @@ object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
         ((unnormFilters(::, *) / (twoNorms + 1e-10)) * whitener.whitener.t, whitener)
     }
 
-    val convolver = new Convolver(filters, imageSize, imageSize, numChannels, Some(whitener), true)
-    // TODO(stephentu): currently not flexible
-    assert(convolver.resWidth == 27 && convolver.resHeight == 27)
-    val stride = 2
-    val windowSize = 19
-    val nResulting = (0 until convolver.resWidth - windowSize + 1 by stride)
-      .flatMap { _ => (0 until convolver.resHeight - windowSize + 1 by stride).map { _ => 1 } }
-      .size
-
-    println(s"convolver.resWidth ${convolver.resWidth} convolver.resHeight ${convolver.resHeight}")
-    println(s"nResulting $nResulting")
-
-    val pooling = SymmetricRectifier(alpha=conf.alpha)
+    val unscaledFeaturizer = new Convolver(filters, augmentRandomPatchSize, augmentRandomPatchSize, numChannels, Some(whitener), true)
+        .andThen(SymmetricRectifier(alpha=conf.alpha))
         .andThen(new Pooler(conf.poolStride, conf.poolSize, identity, _.sum))
         .andThen(ImageVectorizer)
         .andThen(new Cacher[DenseVector[Double]])
-    val trainFeaturesUnscaled: RDD[DenseVector[Double]] = pooling(new Windower(stride, windowSize).apply(convolver(trainImages)))
-    val scaler = (new StandardScaler).fit(trainFeaturesUnscaled).andThen(new Cacher[DenseVector[Double]])
 
-    val trainFeatures = scaler(trainFeaturesUnscaled)
-    val trainLabels = new LabelAugmenter(nResulting).apply(LabelExtractor.apply(trainData)).cache()
+    val featurizer = unscaledFeaturizer.andThen(new StandardScaler, trainImages)
+        .andThen(new Cacher[DenseVector[Double]])
+
+    val labelExtractor = LabelExtractor andThen new Cacher[Int]
+
+    val trainFeatures = featurizer(trainImagesAugmented)
+    val trainLabels = new LabelAugmenter(numRandomPatchesAugment).apply(labelExtractor(trainData)).cache()
+
+    // gotta love spark
+    trainLabels.zip(trainImageIdsAugmented).zip(trainFeatures.map(_.toArray)).map { case (labelIdx, data) =>
+      labelIdx._2 + ".jpg," + labelIdx._1 + "," + data.mkString(",")
+    }.saveAsTextFile(conf.trainOutfile)
 
     val testData = loader(sc, conf.testLocation)
     val testImages = ImageExtractor(testData)
+    val testImageIds = testImages.zipWithIndex.map(x => x._2.toInt)
 
-    // gotta love spark
+    val numTestAugment = 10 // 4 corners, center and flips of each of the 5
 
-    trainLabels.zip(trainFeatures.map(_.toArray)).map { case (label, data) =>
-      label + "," + data.mkString(",")
-    }.saveAsTextFile(conf.trainOutfile)
+    val testImageIdsAugmented = new LabelAugmenter(numTestAugment).apply(testImageIds)
+    val testImagesAugmented = new RandomFlips(numRandomPatchesAugment, augmentRandomPatchSize, centerCorners=true).apply(testImages)
 
-    val testFeatures = convolver
-        .andThen(new ImageCrop(4, 4, windowSize + 4, windowSize + 4))
-        .andThen(pooling)
-        .andThen(scaler)
-        .apply(testImages)
-    val testLabels = LabelExtractor.andThen(new Cacher[Int]).apply(testData)
+    val testFeatures = featurizer(testImagesAugmented)
+    val testLabels = new LabelAugmenter(numTestAugment).apply(labelExtractor(testData))
 
-    testLabels.zip(testFeatures.map(_.toArray)).map { case (label, data) =>
-      label + "," + data.mkString(",")
+    testLabels.zip(testImageIdsAugmented).zip(testFeatures.map(_.toArray)).map { case (labelIdx, data) =>
+      labelIdx._2 + ".jpg," + labelIdx._1 + "," + data.mkString(",")
     }.saveAsTextFile(conf.testOutfile)
 
   }
@@ -123,6 +119,7 @@ object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
       poolSize: Int = 10,
       poolStride: Int = 9,
       alpha: Double = 0.25,
+      numRandomPatchesAugment: Int = 10,
       imageSize: Int = 32)
 
   def parse(args: Array[String]): RandomCifarFeaturizerConfig = new OptionParser[RandomCifarFeaturizerConfig](appName) {
@@ -136,6 +133,7 @@ object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
     opt[Int]("patchSize") action { (x,c) => c.copy(patchSize=x) }
     opt[Int]("patchSteps") action { (x,c) => c.copy(patchSteps=x) }
     opt[Int]("poolSize") action { (x,c) => c.copy(poolSize=x) }
+    opt[Int]("numRandomPatchesAugment") action { (x,c) => c.copy(numRandomPatchesAugment=x) }
     opt[Double]("alpha") action { (x,c) => c.copy(alpha=x) }
     opt[Int]("imageSize") action { (x,c) => c.copy(imageSize=x) }
   }.parse(args, RandomCifarFeaturizerConfig()).get
