@@ -1,7 +1,9 @@
 package utils
 
 import java.awt.image.BufferedImage
+import java.awt.image.WritableRaster
 import java.io.InputStream
+import java.io.OutputStream
 import javax.imageio.ImageIO
 
 import pipelines.Logging
@@ -42,6 +44,36 @@ object ImageUtils extends Logging {
           logWarning(s"Failed to parse image: due to ${e.getMessage}")
           None
       }
+    }
+  }
+
+  def saveImage(img: Image, outputStream: OutputStream, formatName: String = "png"): Unit = {
+    classOf[ImageIO].synchronized {
+      assert(img.metadata.numChannels == 3)
+      val bufferedImg = new BufferedImage(img.metadata.yDim, img.metadata.xDim, BufferedImage.TYPE_3BYTE_BGR)
+      val byteArrayImg = new Array[Double](img.metadata.yDim * img.metadata.xDim * img.metadata.numChannels)
+      var x = 0
+      while (x < img.metadata.xDim) {
+        var y = 0
+        while (y < img.metadata.yDim) {
+          var c = 0
+          var cSource = img.metadata.numChannels - 1
+          while (c < img.metadata.numChannels) {
+            val idx = c + y*img.metadata.numChannels + x*img.metadata.yDim*img.metadata.numChannels
+            byteArrayImg(idx) = img.get(x, y, cSource)
+            c = c + 1
+            // FIXME: This is to change the channel from BGR that exists in our image class to RGB
+            // Why do we need to do this ?
+            cSource = cSource - 1
+          }
+          y = y + 1
+        }
+        x = x + 1
+      }
+      val raster = bufferedImg.getData().asInstanceOf[WritableRaster]
+      raster.setPixels(0, 0, img.metadata.yDim, img.metadata.xDim, byteArrayImg.map(_.toInt))
+      bufferedImg.setData(raster)
+      ImageIO.write(bufferedImg, formatName, outputStream)
     }
   }
 

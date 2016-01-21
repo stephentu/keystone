@@ -16,16 +16,16 @@ import scopt.OptionParser
 import utils.{MatrixUtils, Stats, Image, ImageUtils}
 
 
-class LabelAugmenter(mult: Int) extends FunctionNode[RDD[Int], RDD[Int]] {
-  def apply(in: RDD[Int]) = in.flatMap(x => Seq.fill(mult)(x))
-}
-
-class ImageCrop(xStart: Int, yStart: Int,
-                xEnd: Int, yEnd: Int) extends workflow.Transformer[Image, Image] {
-
-  def apply(img: Image): Image = ImageUtils.crop(img, xStart, yStart, xEnd, yEnd)
-
-}
+//class LabelAugmenter(mult: Int) extends FunctionNode[RDD[Int], RDD[Int]] {
+//  def apply(in: RDD[Int]) = in.flatMap(x => Seq.fill(mult)(x))
+//}
+//
+//class ImageCrop(xStart: Int, yStart: Int,
+//                xEnd: Int, yEnd: Int) extends workflow.Transformer[Image, Image] {
+//
+//  def apply(img: Image): Image = ImageUtils.crop(img, xStart, yStart, xEnd, yEnd)
+//
+//}
 
 object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
   val appName = "RandomPatchCifarFeaturizerRawAugment"
@@ -36,6 +36,8 @@ object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
     val imageSize = conf.imageSize
     val numChannels = 3
     val whitenerSize = 100000
+    val numRandomPatches = 10
+    val randomPatchSize = 24
 
     val loader = new GeneralCifarLoader(imageSize, imageSize)
 
@@ -44,7 +46,7 @@ object RandomPatchCifarFeaturizerRawAugment extends Serializable with Logging {
     //Augment data here
     //flatmap operation on image. Just implement the algorithm.
     // use the Keystone Image class _. images utils.scala. don't use the windower. but look at the windower
-    val randomFlipper = new RandomFlips()
+    val randomFlipper = new RandomFlips(numRandomPatches, randomPatchSize)
     
     val trainImages = ImageExtractor(trainData)
 
