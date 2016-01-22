@@ -27,6 +27,7 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
     // Load up training data, and optionally sample.
     val trainData = CifarLoader(sc, conf.trainLocation).cache
     val trainImages = ImageExtractor(trainData)
+    val trainImageIds = trainImages.zipWithIndex.map(x => x._2.toInt)
 
     val patchExtractor = new Windower(conf.patchSteps, conf.patchSize)
       .andThen(ImageVectorizer.apply)
@@ -62,18 +63,19 @@ object RandomPatchCifarFeaturizer extends Serializable with Logging {
 
     val testData = CifarLoader(sc, conf.testLocation)
     val testImages = ImageExtractor(testData)
+    val testImageIds = testImages.zipWithIndex.map(x => x._2.toInt)
 
     // gotta love spark
 
-    trainLabels.zip(trainFeatures.map(_.toArray)).map { case (label, data) =>
-      label + "," + data.mkString(",")
+    trainLabels.zip(trainImageIds).zip(trainFeatures.map(_.toArray)).map { case (labelIdx, data) =>
+      labelIdx._2 + ".jpg," + labelIdx._1 + "," + data.mkString(",")
     }.saveAsTextFile(conf.trainOutfile)
 
     val testFeatures = featurizer(testImages)
     val testLabels = labelExtractor(testData)
 
-    testLabels.zip(testFeatures.map(_.toArray)).map { case (label, data) =>
-      label + "," + data.mkString(",")
+    testLabels.zip(testImageIds).zip(testFeatures.map(_.toArray)).map { case (labelIdx, data) =>
+      labelIdx._2 + ".jpg," + labelIdx._1 + "," + data.mkString(",")
     }.saveAsTextFile(conf.testOutfile)
 
   }
