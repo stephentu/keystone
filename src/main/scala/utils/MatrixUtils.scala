@@ -131,4 +131,27 @@ object MatrixUtils extends Serializable {
     sumCount._1 /= sumCount._2.toDouble
   }
 
+  /**
+   * Given a m x n matrix, create a m x m matrix where the
+   * i,j-th entry contains ||x_i - x_j||^2 in Euclidean norm, with
+   * x_i referencing the i-th row of the input
+   */
+  def squaredPDist(in: DenseMatrix[Double]): DenseMatrix[Double] = {
+    val n = in.rows
+    val xxt = in * in.t
+
+    val norms = DenseVector.zeros[Double](n)
+    var i = 0
+    while (i < n) {
+      norms(i) = in(i, ::) * in(i, ::).t
+      i += 1
+    }
+
+    val ones = DenseVector.ones[Double](n)
+    val m1 = norms * ones.t
+    val m2 = ones * norms.t
+
+    m1 + m2 - (xxt * 2.0)
+  }
+
 }
