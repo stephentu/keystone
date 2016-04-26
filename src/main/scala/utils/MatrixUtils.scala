@@ -131,6 +131,16 @@ object MatrixUtils extends Serializable {
     sumCount._1 /= sumCount._2.toDouble
   }
 
+  def rowNorms(in: DenseMatrix[Double]): DenseVector[Double] = {
+    val norms = DenseVector.zeros[Double](in.rows)
+    var i = 0
+    while (i < in.rows) {
+      norms(i) = in(i, ::) * in(i, ::).t
+      i += 1
+    }
+    norms
+  }
+
   /**
    * Given a m x n matrix, create a m x m matrix where the
    * i,j-th entry contains ||x_i - x_j||^2 in Euclidean norm, with
@@ -140,18 +150,29 @@ object MatrixUtils extends Serializable {
     val n = in.rows
     val xxt = in * in.t
 
-    val norms = DenseVector.zeros[Double](n)
-    var i = 0
-    while (i < n) {
-      norms(i) = in(i, ::) * in(i, ::).t
-      i += 1
-    }
-
+    val norms = rowNorms(in)
     val ones = DenseVector.ones[Double](n)
     val m1 = norms * ones.t
     val m2 = ones * norms.t
 
     m1 + m2 - (xxt * 2.0)
+  }
+
+  def squaredPDist(lhs: DenseMatrix[Double], rhs: DenseMatrix[Double]): DenseMatrix[Double] = {
+    val n1 = lhs.rows
+    val n2 = rhs.rows
+    val xyt = lhs * rhs.t
+
+    val lhsNorms = rowNorms(lhs)
+    val rhsNorms = rowNorms(rhs)
+
+    val onesN1 = DenseVector.ones[Double](n1)
+    val onesN2 = DenseVector.ones[Double](n2)
+
+    val m1 = lhsNorms * onesN2.t
+    val m2 = onesN1 * rhsNorms.t
+
+    m1 + m2 - (xyt * 2.0)
   }
 
 }
