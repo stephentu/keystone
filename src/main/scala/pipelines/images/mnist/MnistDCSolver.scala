@@ -29,6 +29,85 @@ object MnistDCSolver extends Serializable with Logging {
     }
 
 
+  def runSimpleSpark(sc: SparkContext, conf: MnistDCSolverConfig): Unit = {
+
+    logInfo(ccAsMap(conf).toString)
+
+    // This is a property of the MNIST Dataset (digits 0 - 9)
+    val numClasses = 10
+
+    val prng = new MersenneTwister(conf.seed)
+    val kmeansSeed = prng.nextLong
+    val randomSignSource = new RandBasis(new ThreadLocalRandomGenerator(prng))
+
+    // The number of pixels in an MNIST image (28 x 28 = 784)
+    // Because the mnistImageSize is 784, we get 512 PaddedFFT features per FFT.
+    val mnistImageSize = 784
+
+    val startTime = System.nanoTime()
+
+    val train = LabeledData(
+      CsvDataLoader(sc, conf.trainLocation, conf.numPartitions)
+        // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
+        .map(x => (x(0).toInt - 1, x(1 until x.length)))
+        .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
+        .cache())
+
+    val test = LabeledData(
+      CsvDataLoader(sc, conf.testLocation, conf.numPartitions)
+        // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
+        .map(x => (x(0).toInt - 1, x(1 until x.length)))
+        .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
+        .cache())
+
+    // necessary since kmeans returns one-hot encoded vectors
+    def oneHotToNumber(x: DenseVector[Double]): Int = {
+      var i = 0
+      while (i < x.size) {
+        if (x(i) == 1.0)
+          return i
+        i += 1
+      }
+      throw new RuntimeException("should not get here")
+    }
+
+    val lambda = conf.lambda
+    val gamma = conf.gamma
+
+    val models = train.labeledData.mapPartitions { partition =>
+          val elems: Seq[(Int, DenseVector[Double])] = partition.toSeq
+          println("elems.size: " + elems.size)
+          val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
+          val Xtrain = MatrixUtils.rowsToMatrix(elems.map(_._2))
+          val Ytrain = MatrixUtils.rowsToMatrix(elems.map(_._1).map(classLabeler.apply))
+          println("Xtrain.shape: " + Xtrain.rows + ", " + Xtrain.cols)
+          println("Ytrain.shape: " + Ytrain.rows + ", " + Ytrain.cols)
+          val Ktrain = GaussianKernel(gamma).apply(Xtrain)
+          assert(Ktrain.rows == Xtrain.rows && Ktrain.rows == Ktrain.cols)
+          val lhs = Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)
+          println("starting A backslash b")
+          val alphaStar = lhs \ Ytrain
+          println("done with A backslash b")
+          // evaluate training error-- we can do this now for DC-SVM since
+          // the model used for prediction is the one associated with the center
+          val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
+          val trainLabels = elems.map(_._1)
+          assert(predictions.size == trainLabels.size)
+
+          val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+
+          val trainErrorRate = (nErrors.toDouble / Xtrain.size.toDouble)
+          val trainAccRate = 1.0 - trainErrorRate
+
+          println("localTrainEval acc: " + trainAccRate + ", err: " + trainErrorRate)
+
+          Iterator.single((alphaStar, Xtrain, trainLabels, predictions))
+        }.cache()
+    models.count()
+
+  }
+
+
   def runSimple(conf: MnistDCSolverConfig): Unit = {
 
     logInfo(ccAsMap(conf).toString)
@@ -241,7 +320,14 @@ object MnistDCSolver extends Serializable with Logging {
    */
   def main(args: Array[String]) = {
     val appConfig = parse(args)
-    runSimple(appConfig)
+
+    //runSimple(appConfig)
+
+    val conf = new SparkConf().setAppName(appName)
+    conf.setIfMissing("spark.master", "local[24]")
+    val sc = new SparkContext(conf)
+    runSimpleSpark(sc, appConfig)
+    sc.stop()
 
     //val conf = new SparkConf().setAppName(appName)
     //conf.setIfMissing("spark.master", "local[24]")
