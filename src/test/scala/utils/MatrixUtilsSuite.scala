@@ -30,8 +30,9 @@ class MatrixUtilsSuite extends FunSuite with LocalSparkContext {
     val numRows = 75
     val numCols = 32
     val in = DenseMatrix.rand(numRows, numCols)
-    val p = MatrixUtils.squaredPDist(in)
+    val in2 = DenseMatrix.rand(numRows * 2, numCols)
 
+    val p = MatrixUtils.squaredPDist(in)
     var i = 0
     while (i < numRows) {
       var j = 0
@@ -43,6 +44,17 @@ class MatrixUtilsSuite extends FunSuite with LocalSparkContext {
       i += 1
     }
 
+    val p2 = MatrixUtils.squaredPDist(in, in2)
+    i = 0
+    while (i < numRows) {
+      var j = 0
+      while (j < numRows * 2) {
+        val dist = norm(in(i, ::).t - in2(j, ::).t)
+        assert(Stats.aboutEq(dist * dist, p2(i, j), 1e-6))
+        j += 1
+      }
+      i += 1
+    }
   }
 
 }
