@@ -152,10 +152,15 @@ object MatrixUtils extends Serializable {
 
     val norms = rowNorms(in)
     val ones = DenseVector.ones[Double](n)
-    val m1 = norms * ones.t
-    val m2 = ones * norms.t
 
-    m1 + m2 - (xxt * 2.0)
+    //val m1 = norms * ones.t
+    //val m2 = ones * norms.t
+    //m1 + m2 - (xxt * 2.0)
+
+    xxt :*= (-2.0)
+    xxt(::, *) :+= norms
+    xxt(*, ::) :+= norms
+    xxt
   }
 
   def squaredPDist(lhs: DenseMatrix[Double], rhs: DenseMatrix[Double]): DenseMatrix[Double] = {
@@ -166,13 +171,16 @@ object MatrixUtils extends Serializable {
     val lhsNorms = rowNorms(lhs)
     val rhsNorms = rowNorms(rhs)
 
-    val onesN1 = DenseVector.ones[Double](n1)
-    val onesN2 = DenseVector.ones[Double](n2)
+    //val onesN1 = DenseVector.ones[Double](n1)
+    //val onesN2 = DenseVector.ones[Double](n2)
+    //val m1 = lhsNorms * onesN2.t
+    //val m2 = onesN1 * rhsNorms.t
+    //m1 + m2 - (xyt * 2.0)
 
-    val m1 = lhsNorms * onesN2.t
-    val m2 = onesN1 * rhsNorms.t
-
-    m1 + m2 - (xyt * 2.0)
+    xyt :*= (-2.0)
+    xyt(::, *) :+= lhsNorms
+    xyt(*, ::) :+= rhsNorms
+    xyt
   }
 
 }

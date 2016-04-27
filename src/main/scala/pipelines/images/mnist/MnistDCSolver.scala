@@ -46,12 +46,14 @@ object MnistDCSolver extends Serializable with Logging {
       CsvDataLoader(sc, conf.trainLocation, conf.numPartitions)
         // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
         .map(x => (x(0).toInt - 1, x(1 until x.length)))
+        .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
         .cache())
 
     val test = LabeledData(
       CsvDataLoader(sc, conf.testLocation, conf.numPartitions)
         // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
         .map(x => (x(0).toInt - 1, x(1 until x.length)))
+        .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
         .cache())
 
     // necessary since kmeans returns one-hot encoded vectors
@@ -76,20 +78,33 @@ object MnistDCSolver extends Serializable with Logging {
 
     val trainingStartTime = System.nanoTime()
     val trainAssignments: org.apache.spark.rdd.RDD[Int] = kmeans(train.data).map(oneHotToNumber)
+
     val trainPartitions: org.apache.spark.rdd.RDD[(Int, (Int, DenseVector[Double]))] = trainAssignments.zip(train.labeledData)
     val models: org.apache.spark.rdd.RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double], Seq[Int], Array[Int]))] = trainPartitions.groupByKey()
       .mapValues { partition =>
           val elems: Seq[(Int, DenseVector[Double])] = partition.toSeq
+          println("elems.size: " + elems.size)
           val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
           val Xtrain = MatrixUtils.rowsToMatrix(elems.map(_._2))
           val Ytrain = MatrixUtils.rowsToMatrix(elems.map(_._1).map(classLabeler.apply))
+          println("Xtrain.shape: " + Xtrain.rows + ", " + Xtrain.cols)
+          println("Ytrain.shape: " + Ytrain.rows + ", " + Ytrain.cols)
           val Ktrain = GaussianKernel(gamma).apply(Xtrain)
+          assert(Ktrain.rows == Xtrain.rows && Ktrain.rows == Ktrain.cols)
           val lhs = Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)
+          println("starting A backslash b")
           val alphaStar = lhs \ Ytrain
+          println("done with A backslash b")
           // evaluate training error-- we can do this now for DC-SVM since
           // the model used for prediction is the one associated with the center
           val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
-          (alphaStar, Xtrain, elems.map(_._1), predictions)
+          val trainLabels = elems.map(_._1)
+          assert(predictions.size == trainLabels.size)
+
+          val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+
+          println("localTrainEval error: " + (100 * nErrors.toDouble / elems.size.toDouble) + "%")
+          (alphaStar, Xtrain, trainLabels, predictions)
         }.cache()
     models.count()
     logInfo(s"Training took ${(System.nanoTime() - trainingStartTime)/1e9} s")
