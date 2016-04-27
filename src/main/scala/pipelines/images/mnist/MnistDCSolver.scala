@@ -19,14 +19,22 @@ import workflow.Pipeline
 object MnistDCSolver extends Serializable with Logging {
   val appName = "MnistDCSolver"
 
+  // http://stackoverflow.com/questions/1226555/case-class-to-map-in-scala
+  private def ccAsMap(cc: AnyRef) =
+    (Map[String, Any]() /: cc.getClass.getDeclaredFields) {(a, f) =>
+      f.setAccessible(true)
+      a + (f.getName -> f.get(cc))
+    }
+
   def run(sc: SparkContext, conf: MnistDCSolverConfig): Pipeline[DenseVector[Double], Int] = {
+    logInfo(ccAsMap(conf).toString)
+
     // This is a property of the MNIST Dataset (digits 0 - 9)
     val numClasses = 10
 
     val prng = new MersenneTwister(conf.seed)
     val kmeansSeed = prng.nextLong
     val randomSignSource = new RandBasis(new ThreadLocalRandomGenerator(prng))
-
 
     // The number of pixels in an MNIST image (28 x 28 = 784)
     // Because the mnistImageSize is 784, we get 512 PaddedFFT features per FFT.
@@ -46,8 +54,7 @@ object MnistDCSolver extends Serializable with Logging {
         .map(x => (x(0).toInt - 1, x(1 until x.length)))
         .cache())
 
-    //val labels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
-
+    // necessary since kmeans returns one-hot encoded vectors
     def oneHotToNumber(x: DenseVector[Double]): Int = {
       var i = 0
       while (i < x.size) {
@@ -62,7 +69,12 @@ object MnistDCSolver extends Serializable with Logging {
     val gamma = conf.gamma
 
     val trainSubsample = train.data.sample(false, conf.kmeansSampleSize, kmeansSeed)
-    val kmeans = KMeansPlusPlusEstimator(conf.numPartitions, 10).fit(trainSubsample)
+
+    val kmeansStartTime = System.nanoTime()
+    val kmeans = KMeansPlusPlusEstimator(conf.numPartitions, 100).fit(trainSubsample)
+    logInfo(s"KMeans took ${(System.nanoTime() - kmeansStartTime)/1e9} s")
+
+    val trainingStartTime = System.nanoTime()
     val trainAssignments: org.apache.spark.rdd.RDD[Int] = kmeans(train.data).map(oneHotToNumber)
     val trainPartitions: org.apache.spark.rdd.RDD[(Int, (Int, DenseVector[Double]))] = trainAssignments.zip(train.labeledData)
     val models: org.apache.spark.rdd.RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double], Seq[Int], Array[Int]))] = trainPartitions.groupByKey()
@@ -79,9 +91,12 @@ object MnistDCSolver extends Serializable with Logging {
           val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
           (alphaStar, Xtrain, elems.map(_._1), predictions)
         }.cache()
+    models.count()
+    logInfo(s"Training took ${(System.nanoTime() - trainingStartTime)/1e9} s")
 
     val testData: org.apache.spark.rdd.RDD[(Int, Iterable[(Int, DenseVector[Double])])] = kmeans(test.data).map(oneHotToNumber).zip(test.labeledData).groupByKey(models.partitioner.get)
 
+    val testEvaluationStartTime = System.nanoTime()
     val testEvaluation = models.join(testData).mapValues { case (lhs, rhs) =>
       val alphaStar = lhs._1
       val Xtrain = lhs._2
@@ -92,6 +107,8 @@ object MnistDCSolver extends Serializable with Logging {
       val testPredictions = MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar).map(MaxClassifier.apply)
       (Ytest, testPredictions)
     }.cache()
+    testEvaluation.count()
+    logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
 
     // RDD does not have flatten?
     val flattenedTrainLabels = models.map(_._2._3).flatMap(x => x)
@@ -124,11 +141,11 @@ object MnistDCSolver extends Serializable with Logging {
     help("help") text("prints this usage text")
     opt[String]("trainLocation") required() action { (x,c) => c.copy(trainLocation=x) }
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
-    opt[Int]("numPartitions") action { (x,c) => c.copy(numPartitions=x) }
-    opt[Int]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
-    opt[Double]("lambda") action { (x,c) => c.copy(lambda=x) }
-    opt[Double]("gamma") action { (x,c) => c.copy(gamma=x) }
-    opt[Long]("seed") action { (x,c) => c.copy(seed=x) }
+    opt[Int]("numPartitions") required() action { (x,c) => c.copy(numPartitions=x) }
+    opt[Double]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
+    opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
+    opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
+    opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
   }.parse(args, MnistDCSolverConfig()).get
 
   /**
@@ -140,7 +157,7 @@ object MnistDCSolver extends Serializable with Logging {
     val appConfig = parse(args)
 
     val conf = new SparkConf().setAppName(appName)
-    conf.setIfMissing("spark.master", "local[2]")
+    conf.setIfMissing("spark.master", "local[24]")
     val sc = new SparkContext(conf)
     run(sc, appConfig)
 
