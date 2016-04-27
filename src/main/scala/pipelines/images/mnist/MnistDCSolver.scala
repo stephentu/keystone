@@ -1,10 +1,11 @@
 package pipelines.images.mnist
 
-import breeze.linalg.{DenseVector, DenseMatrix}
+import breeze.linalg.{DenseVector, DenseMatrix, csvread, argmax}
+
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import evaluation.MulticlassClassifierEvaluator
 import loaders.{CsvDataLoader, LabeledData}
-import nodes.learning.{KMeansPlusPlusEstimator, BlockLeastSquaresEstimator}
+import nodes.learning.{KMeansModel, KMeansPlusPlusEstimator, BlockLeastSquaresEstimator}
 import nodes.stats.{LinearRectifier, PaddedFFT, RandomSignNode, GaussianKernel}
 import nodes.util._
 import org.apache.commons.math3.random.MersenneTwister
@@ -14,6 +15,7 @@ import pipelines._
 import scopt.OptionParser
 import utils.{Image, MatrixUtils}
 import workflow.Pipeline
+import java.io.File
 
 
 object MnistDCSolver extends Serializable with Logging {
@@ -25,6 +27,59 @@ object MnistDCSolver extends Serializable with Logging {
       f.setAccessible(true)
       a + (f.getName -> f.get(cc))
     }
+
+
+  def runSimple(conf: MnistDCSolverConfig): Unit = {
+
+    logInfo(ccAsMap(conf).toString)
+
+    val numClasses = 10
+    val mnistImageSize = 784
+
+    val train =
+      MatrixUtils.matrixToRowArray(csvread(new File(conf.trainLocation), ','))
+        .map(x => (x(0).toInt - 1, x(1 until x.length)))
+        .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
+
+    // take first 10000
+
+    val lambda = conf.lambda
+    val gamma = conf.gamma
+    val train10k = train.take(10000)
+
+    val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
+    val Xtrain = MatrixUtils.rowsToMatrix(train10k.map(_._2))
+    val Ytrain = MatrixUtils.rowsToMatrix(train10k.map(_._1).map(classLabeler.apply))
+
+    println("Xtrain.shape: " + Xtrain.rows + ", " + Xtrain.cols)
+    println("Ytrain.shape: " + Ytrain.rows + ", " + Ytrain.cols)
+
+    try {
+      val Ktrain = GaussianKernel(gamma).apply(Xtrain)
+      assert(Ktrain.rows == Xtrain.rows && Ktrain.rows == Ktrain.cols)
+      val lhs = Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)
+      println("starting A backslash b")
+      val alphaStar = lhs \ Ytrain
+      println("done with A backslash b")
+      // evaluate training error-- we can do this now for DC-SVM since
+      // the model used for prediction is the one associated with the center
+      val predictions = Ktrain * alphaStar
+      println("done with predictions " + predictions.rows + " " + train10k.size)
+      //val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
+      val trainLabels: Array[Int] = train10k.map(_._1).toArray
+      //assert(predictions.rows == trainLabels.size)
+      println("predictions.rows " + predictions.rows + ", trainLabels.size" + trainLabels.size)
+      // val nErrors = (0 until predictions.rows).map { i =>
+      //   if (argmax(predictions(i, ::)) != trainLabels(i)) 1 else 0
+      // }.sum
+      // println("localTrainEval error: " + (100 * nErrors.toDouble / train10k.size.toDouble) + "%")
+    } catch {
+      case e: Exception =>
+        println("WE GOT EXCEPTION", e)
+        e.printStackTrace()
+    }
+  }
+
 
   def run(sc: SparkContext, conf: MnistDCSolverConfig): Pipeline[DenseVector[Double], Int] = {
     logInfo(ccAsMap(conf).toString)
@@ -60,7 +115,7 @@ object MnistDCSolver extends Serializable with Logging {
     def oneHotToNumber(x: DenseVector[Double]): Int = {
       var i = 0
       while (i < x.size) {
-        if (x(i) != 0)
+        if (x(i) == 1.0)
           return i
         i += 1
       }
@@ -70,10 +125,14 @@ object MnistDCSolver extends Serializable with Logging {
     val lambda = conf.lambda
     val gamma = conf.gamma
 
-    val trainSubsample = train.data.sample(false, conf.kmeansSampleSize, kmeansSeed)
-
     val kmeansStartTime = System.nanoTime()
-    val kmeans = KMeansPlusPlusEstimator(conf.numPartitions, 100).fit(trainSubsample)
+    val kmeans = conf.kmeansCenters.map { fname =>
+      val centers = csvread(new File(fname), ',')
+      KMeansModel(centers)
+    }.getOrElse {
+      val trainSubsample = train.data.sample(false, conf.kmeansSampleSize, kmeansSeed)
+      KMeansPlusPlusEstimator(conf.numPartitions, 100).fit(trainSubsample)
+    }
     logInfo(s"KMeans took ${(System.nanoTime() - kmeansStartTime)/1e9} s")
 
     val trainingStartTime = System.nanoTime()
@@ -147,6 +206,7 @@ object MnistDCSolver extends Serializable with Logging {
       testLocation: String = "",
       numPartitions: Int = 10,
       kmeansSampleSize: Double = 0.1,
+      kmeansCenters: Option[String] = None,
       lambda: Double = 0.0,
       gamma: Double = 0,
       seed: Long = 0)
@@ -158,6 +218,7 @@ object MnistDCSolver extends Serializable with Logging {
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
     opt[Int]("numPartitions") required() action { (x,c) => c.copy(numPartitions=x) }
     opt[Double]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
+    opt[String]("kmeansCenters") action { (x,c) => c.copy(kmeansCenters=Some(x)) }
     opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
     opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
@@ -170,12 +231,12 @@ object MnistDCSolver extends Serializable with Logging {
    */
   def main(args: Array[String]) = {
     val appConfig = parse(args)
+    runSimple(appConfig)
 
-    val conf = new SparkConf().setAppName(appName)
-    conf.setIfMissing("spark.master", "local[24]")
-    val sc = new SparkContext(conf)
-    run(sc, appConfig)
-
-    sc.stop()
+    //val conf = new SparkConf().setAppName(appName)
+    //conf.setIfMissing("spark.master", "local[24]")
+    //val sc = new SparkContext(conf)
+    //run(sc, appConfig)
+    //sc.stop()
   }
 }

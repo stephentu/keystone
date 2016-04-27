@@ -16,6 +16,10 @@ scalaVersion := "2.10.4"
 
 parallelExecution in Test := false
 
+fork := true
+
+javaOptions += "-Xmx200g"
+
 libraryDependencies ++= Seq(
   "edu.arizona.sista" % "processors" % "3.0" exclude("ch.qos.logback", "logback-classic"),
   "edu.arizona.sista" % "processors" % "3.0" classifier "models",
