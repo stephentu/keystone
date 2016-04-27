@@ -63,16 +63,26 @@ object MnistDCSolver extends Serializable with Logging {
       println("done with A backslash b")
       // evaluate training error-- we can do this now for DC-SVM since
       // the model used for prediction is the one associated with the center
-      val predictions = Ktrain * alphaStar
-      println("done with predictions " + predictions.rows + " " + train10k.size)
-      //val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
-      val trainLabels: Array[Int] = train10k.map(_._1).toArray
+
+      val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
+      val trainLabels = train10k.map(_._1)
+      assert(predictions.size == trainLabels.size)
+      val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+
+      //val predictions = Ktrain * alphaStar
+      //println("done with predictions " + predictions.rows + " " + train10k.size)
+      ////val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
+      //val trainLabels: Array[Int] = train10k.map(_._1).toArray
       //assert(predictions.rows == trainLabels.size)
-      println("predictions.rows " + predictions.rows + ", trainLabels.size" + trainLabels.size)
-      // val nErrors = (0 until predictions.rows).map { i =>
-      //   if (argmax(predictions(i, ::)) != trainLabels(i)) 1 else 0
-      // }.sum
-      // println("localTrainEval error: " + (100 * nErrors.toDouble / train10k.size.toDouble) + "%")
+      //println("predictions.rows " + predictions.rows + ", trainLabels.size" + trainLabels.size)
+      //val nErrors = (0 until predictions.rows).map { i =>
+      //  if (argmax(predictions(i, ::)) != trainLabels(i)) 1 else 0
+      //}.sum
+
+      val trainErrorRate = (nErrors.toDouble / train10k.size.toDouble)
+      val trainAccRate = 1.0 - trainErrorRate
+
+      println("localTrainEval acc: " + trainAccRate + ", err: " + trainErrorRate)
     } catch {
       case e: Exception =>
         println("WE GOT EXCEPTION", e)
