@@ -1,6 +1,7 @@
 package pipelines.images.mnist
 
-import breeze.linalg.{DenseVector, DenseMatrix, csvread, argmax}
+import breeze.linalg._
+import breeze.numerics._
 
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import evaluation.MulticlassClassifierEvaluator
@@ -28,6 +29,9 @@ object MnistDCSolver extends Serializable with Logging {
       a + (f.getName -> f.get(cc))
     }
 
+  private def froNormSquared(a: DenseMatrix[Double]): Double = {
+    sum(a.values.map(x => math.pow(x, 2)))
+  }
 
   def runSimpleSpark(sc: SparkContext, conf: MnistDCSolverConfig): Unit = {
 
@@ -74,15 +78,18 @@ object MnistDCSolver extends Serializable with Logging {
     val lambda = conf.lambda
     val gamma = conf.gamma
 
-    val models = train.labeledData.mapPartitions { partition =>
+    val models = train.labeledData.zipWithIndex.map { case (datum, idx) =>
+      (idx % conf.numPartitions, datum)
+    }.groupByKey().map { case (partId, partition) =>
           val elems: Seq[(Int, DenseVector[Double])] = partition.toSeq
-          println("elems.size: " + elems.size)
+          println("[" + partId + "] elems.size: " + elems.size)
           val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
           val Xtrain = MatrixUtils.rowsToMatrix(elems.map(_._2))
           val Ytrain = MatrixUtils.rowsToMatrix(elems.map(_._1).map(classLabeler.apply))
           println("Xtrain.shape: " + Xtrain.rows + ", " + Xtrain.cols)
           println("Ytrain.shape: " + Ytrain.rows + ", " + Ytrain.cols)
           val Ktrain = GaussianKernel(gamma).apply(Xtrain)
+          println("[" + partId + "] ||XTrain||_F " + froNormSquared(Xtrain) + ", ||KTrain||_F " + froNormSquared(Ktrain))
           assert(Ktrain.rows == Xtrain.rows && Ktrain.rows == Ktrain.cols)
           val lhs = Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)
           println("starting A backslash b")
@@ -96,10 +103,10 @@ object MnistDCSolver extends Serializable with Logging {
 
           val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
 
-          val trainErrorRate = (nErrors.toDouble / Xtrain.size.toDouble)
+          val trainErrorRate = (nErrors.toDouble / trainLabels.size.toDouble)
           val trainAccRate = 1.0 - trainErrorRate
 
-          println("localTrainEval acc: " + trainAccRate + ", err: " + trainErrorRate)
+          println("[" + partId + "] localTrainEval acc: " + trainAccRate + ", err: " + trainErrorRate + ", nErrors: " + nErrors + ", nLocal: " + trainLabels.size)
 
           Iterator.single((alphaStar, Xtrain, trainLabels, predictions))
         }.cache()
@@ -228,7 +235,7 @@ object MnistDCSolver extends Serializable with Logging {
     val trainAssignments: org.apache.spark.rdd.RDD[Int] = kmeans(train.data).map(oneHotToNumber)
 
     val trainPartitions: org.apache.spark.rdd.RDD[(Int, (Int, DenseVector[Double]))] = trainAssignments.zip(train.labeledData)
-    val models: org.apache.spark.rdd.RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double], Seq[Int], Array[Int]))] = trainPartitions.groupByKey()
+    val models: org.apache.spark.rdd.RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double], Seq[Int], Seq[Int], Int))] = trainPartitions.groupByKey()
       .mapValues { partition =>
           val elems: Seq[(Int, DenseVector[Double])] = partition.toSeq
           println("elems.size: " + elems.size)
@@ -245,17 +252,36 @@ object MnistDCSolver extends Serializable with Logging {
           println("done with A backslash b")
           // evaluate training error-- we can do this now for DC-SVM since
           // the model used for prediction is the one associated with the center
-          val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply)
+          val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
           val trainLabels = elems.map(_._1)
           assert(predictions.size == trainLabels.size)
 
           val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
 
-          println("localTrainEval error: " + (100 * nErrors.toDouble / elems.size.toDouble) + "%")
-          (alphaStar, Xtrain, trainLabels, predictions)
+          val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
+          val trainAccRate = 1.0 - trainErrorRate
+
+          println("localTrainEval acc: " + trainAccRate + ", err: " + trainErrorRate, ", nErrors: " + nErrors + ", nLocal: " + Xtrain.rows)
+
+          (alphaStar, Xtrain, trainLabels, predictions, nErrors)
         }.cache()
     models.count()
     logInfo(s"Training took ${(System.nanoTime() - trainingStartTime)/1e9} s")
+
+    val abc: Seq[Seq[Int]] = models.map(_._2._3).collect()
+    val dfg: Seq[Seq[Int]] = models.map(_._2._4).collect()
+
+    val flattenedTrainLabels = abc.flatten
+    val flattenedTrainPredictions = dfg.flatten
+
+    println("nTotalErrors: " + models.map(_._2._5).collect())
+
+    assert(flattenedTrainLabels.size == flattenedTrainPredictions.size)
+    assert(flattenedTrainLabels.size == train.labeledData.count)
+    val nTrainErrors = flattenedTrainLabels.zip(flattenedTrainPredictions).filter { case (x, y) => x != y }.size
+    val trainErrorRate = (nTrainErrors.toDouble / flattenedTrainLabels.size.toDouble)
+    val trainAccRate = 1.0 - trainErrorRate
+    println("trainEval acc: " + trainAccRate + ", err: " + trainErrorRate)
 
     val testData: org.apache.spark.rdd.RDD[(Int, Iterable[(Int, DenseVector[Double])])] = kmeans(test.data).map(oneHotToNumber).zip(test.labeledData).groupByKey(models.partitioner.get)
 
@@ -268,19 +294,25 @@ object MnistDCSolver extends Serializable with Logging {
       val Ytest = rhsSeq.map(_._1)
       val Ktesttrain = GaussianKernel(gamma).apply(Xtest, Xtrain)
       val testPredictions = MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar).map(MaxClassifier.apply)
+
+      val nErrors = testPredictions.zip(Ytest).filter { case (x, y) => x != y }.size
+      val testErrorRate = (nErrors.toDouble / Xtest.size.toDouble)
+      val testAccRate = 1.0 - testErrorRate
+      println("localtestEval acc: " + testAccRate + ", err: " + testErrorRate)
+
+
       (Ytest, testPredictions)
     }.cache()
     testEvaluation.count()
     logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
 
     // RDD does not have flatten?
-    val flattenedTrainLabels = models.map(_._2._3).flatMap(x => x)
-    val flattenedTrainPredictions = models.map(_._2._4).flatMap(x => x)
+
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
     val flattenedTestPredictions = testEvaluation.map(_._2._2).flatMap(x => x)
 
-    val trainEval = MulticlassClassifierEvaluator(flattenedTrainPredictions, flattenedTrainLabels, numClasses)
-    logInfo("TRAIN Error is " + (100 * trainEval.totalError) + "%")
+    //val trainEval = MulticlassClassifierEvaluator(flattenedTrainPredictions, flattenedTrainLabels, numClasses)
+    //logInfo("TRAIN Error is " + (100 * trainEval.totalError) + "%")
 
     val testEval = MulticlassClassifierEvaluator(flattenedTestPredictions, flattenedTestLabels, numClasses)
     logInfo("TEST Error is " + (100 * testEval.totalError) + "%")
@@ -323,16 +355,16 @@ object MnistDCSolver extends Serializable with Logging {
 
     //runSimple(appConfig)
 
-    val conf = new SparkConf().setAppName(appName)
-    conf.setIfMissing("spark.master", "local[24]")
-    val sc = new SparkContext(conf)
-    runSimpleSpark(sc, appConfig)
-    sc.stop()
-
     //val conf = new SparkConf().setAppName(appName)
     //conf.setIfMissing("spark.master", "local[24]")
     //val sc = new SparkContext(conf)
-    //run(sc, appConfig)
+    //runSimpleSpark(sc, appConfig)
     //sc.stop()
+
+    val conf = new SparkConf().setAppName(appName)
+    conf.setIfMissing("spark.master", "local[24]")
+    val sc = new SparkContext(conf)
+    run(sc, appConfig)
+    sc.stop()
   }
 }
