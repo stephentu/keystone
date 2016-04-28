@@ -14,6 +14,8 @@ import pipelines._
 import utils.{Image, MatrixUtils}
 import workflow.Pipeline
 
+import edu.berkeley.cs.amplab.mlmatrix.util.{Utils => MLMatrixUtils}
+
 import org.apache.spark.rdd.RDD
 
 
@@ -54,6 +56,106 @@ case class DCSolverState(
     val flattenedTestPredictions = testEvaluation.map(_._2._2).flatMap(x => x)
 
     MulticlassClassifierEvaluator(flattenedTestPredictions, flattenedTestLabels, numClasses)
+  }
+
+}
+
+case class DCSolverYuchenState(
+  gamma: Double,
+  models: RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double]))] /* it is assumed each entry in the RDD belongs to a partition */
+) extends Logging {
+
+
+  def metrics(test: LabeledData[Int, DenseVector[Double]],
+              numClasses: Int): MulticlassMetrics = {
+
+    val nModels = models.count()
+    assert(nModels == models.partitions.size)
+
+    var testAccums = test.labeledData.mapPartitions { partition =>
+      Iterator.single(DenseMatrix.zeros[Double](partition.size, numClasses))
+    }.cache()
+    testAccums.count()
+
+    (0 until nModels.toInt).foreach { modelId =>
+
+      // not sure of a better way to do this
+      val (_, model) = models.filter { case (curModelId, _) => curModelId == modelId }.collect().head
+      val modelBC = test.labeledData.context.broadcast(model)
+
+      val newTestAccums = testAccums.zipPartitions(test.labeledData) { case (accums, partition) =>
+        val accum = accums.next()
+        val partitionSeq = partition.toSeq
+
+        val Xtest = MatrixUtils.rowsToMatrix(partitionSeq.map(_._2)) // DenseMatrix[Double]
+        val Ytest = partitionSeq.map(_._1) // Seq[Int]
+
+        val (xTrainPart, alphaStarPart) = modelBC.value
+        val KtesttrainPart = GaussianKernel(gamma).apply(Xtest, xTrainPart)
+
+        accum += KtesttrainPart * alphaStarPart
+        Iterator.single(accum)
+      }.cache()
+      newTestAccums.count()
+      testAccums.unpersist(true)
+      testAccums = newTestAccums
+
+      modelBC.destroy()
+      // TODO: truncate this lineage?
+    }
+
+    MulticlassClassifierEvaluator(
+      testAccums.map { evaluations =>
+        MatrixUtils.matrixToRowArray(evaluations * (1.0 / nModels.toDouble)).map(MaxClassifier.apply).toSeq
+      }.flatMap(x => x),
+      test.labels,
+      numClasses)
+  }
+}
+
+object DCSolverYuchen extends Logging {
+
+  def fit(train: LabeledData[Int, DenseVector[Double]],
+          numClasses: Int,
+          lambda: Double,
+          gamma: Double,
+          numPartitions: Int,
+          permutationSeed: Long): DCSolverYuchenState = {
+
+    val sc = train.labeledData.context
+
+    // TODO: FIXME
+    val shuffledTrain = if (false) {
+      val rng = new util.Random(permutationSeed)
+      val pi = sc.parallelize(rng.shuffle((0 until train.labeledData.count().toInt).toIndexedSeq), numPartitions)
+      // TODO: we might want to not persist this stage so we don't have to materialize 2X of the train data
+      val shuffledTrain = pi.zip(train.labeledData).sortByKey().map(_._2).repartition(numPartitions).cache()
+      shuffledTrain.count()
+      shuffledTrain
+    } else {
+      train.labeledData
+    }
+
+    val models = shuffledTrain.mapPartitionsWithIndex { case (partId, partition) =>
+      val partitionSeq = partition.toSeq
+      val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
+      val Xtrain = MatrixUtils.rowsToMatrix(partitionSeq.map(_._2))
+      val Ytrain = MatrixUtils.rowsToMatrix(partitionSeq.map(_._1).map(classLabeler.apply))
+
+      val localKernelStartTime = System.nanoTime()
+      val Ktrain = GaussianKernel(gamma).apply(Xtrain)
+      logInfo(s"[${partId}] Local kernel gen took ${(System.nanoTime() - localKernelStartTime)/1e9} s")
+
+      val localSolveStartTime = System.nanoTime()
+      val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
+      logInfo(s"[${partId}] Local solve took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+
+      Iterator.single((partId, (Xtrain, alphaStar)))
+    }.cache()
+    models.count()
+    shuffledTrain.unpersist()
+
+    DCSolverYuchenState(gamma, models)
   }
 
 }
@@ -133,3 +235,6 @@ object DCSolver extends Logging {
   }
 
 }
+
+
+
