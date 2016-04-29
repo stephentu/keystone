@@ -24,14 +24,15 @@ import org.apache.spark.rdd.RDD
  */
 
 case class DCSolverState(
+    lambdas: Seq[Double],
     gamma: Double,
     kmeans: KMeansModel,
-    models: RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double]))], /* (partId, (Xtrain_part, alphaStar_part)) */
-    trainEval: MulticlassMetrics) extends Logging {
+    models: RDD[(Int, (DenseMatrix[Double], Seq[DenseMatrix[Double]]))], /* (partId, (Xtrain_part, Seq[alphaStar_part])) */
+    trainEvals: Seq[MulticlassMetrics]) extends Logging {
 
   def metrics(test: LabeledData[Int, DenseVector[Double]],
               numClasses: Int /* should not need to pass this around */):
-    MulticlassMetrics = {
+    Seq[MulticlassMetrics] = {
 
     val testData = models.partitioner.map { partitioner =>
       kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData).groupByKey(partitioner)
@@ -41,21 +42,24 @@ case class DCSolverState(
     }
 
     val testEvaluationStartTime = System.nanoTime()
-    val testEvaluation = models.join(testData).mapValues { case ((xtrain, alphaStar), rhs) =>
+    val testEvaluation = models.join(testData).mapValues { case ((xtrain, alphaStars), rhs) =>
       val rhsSeq = rhs.toSeq
       val Xtest = MatrixUtils.rowsToMatrix(rhsSeq.map(_._2))
       val Ytest = rhsSeq.map(_._1)
       val Ktesttrain = GaussianKernel(gamma).apply(Xtest, xtrain)
-      val testPredictions = MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar).map(MaxClassifier.apply)
-      (Ytest, testPredictions)
+      val allTestPredictions = alphaStars.map { alphaStar =>
+        MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar).map(MaxClassifier.apply)
+      }
+      (Ytest, allTestPredictions)
     }.cache()
     testEvaluation.count()
     logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
 
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
-    val flattenedTestPredictions = testEvaluation.map(_._2._2).flatMap(x => x)
-
-    MulticlassClassifierEvaluator(flattenedTestPredictions, flattenedTestLabels, numClasses)
+    (0 until lambdas.size).map { idx =>
+      val flattenedTestPredictions = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
+      MulticlassClassifierEvaluator(flattenedTestPredictions, flattenedTestLabels, numClasses)
+    }
   }
 
 }
@@ -185,7 +189,7 @@ object DCSolver extends Logging {
 
   def fit(train: LabeledData[Int, DenseVector[Double]],
           numClasses: Int, /* should not need to pass this around */
-          lambda: Double,
+          lambdas: Seq[Double],
           gamma: Double,
           numPartitions: Int,
           kmeansSampleSize: Double,
@@ -213,35 +217,40 @@ object DCSolver extends Logging {
           val Ktrain = GaussianKernel(gamma).apply(Xtrain)
           logInfo(s"[${partId}] Local kernel gen took ${(System.nanoTime() - localKernelStartTime)/1e9} s")
 
-          val localSolveStartTime = System.nanoTime()
-          val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
-          logInfo(s"[${partId}] Local solve took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
-
-          // evaluate training error-- we can do this now for DC-SVM since
-          // the model used for prediction is the one associated with the center
-          val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
           val trainLabels = elems.map(_._1)
-          assert(predictions.size == trainLabels.size)
 
-          val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
-          val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
-          val trainAccRate = 1.0 - trainErrorRate
+          val results = lambdas.map { lambda =>
 
-          logInfo(s"[${partId}] localTrainEval acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+            val localSolveStartTime = System.nanoTime()
+            val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
+            logInfo(s"[${partId}] Local solve took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
 
-          (partId, (Xtrain, alphaStar, trainLabels, predictions))
+            // evaluate training error-- we can do this now for DC-SVM since
+            // the model used for prediction is the one associated with the center
+            val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+            assert(predictions.size == trainLabels.size)
+
+            val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+            val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
+            val trainAccRate = 1.0 - trainErrorRate
+
+            logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+
+            (alphaStar, predictions)
+          }
+
+          (partId, (Xtrain, results.map(_._1), trainLabels, results.map(_._2)))
         }.cache()
     models.count()
     logInfo(s"Training took ${(System.nanoTime() - trainingStartTime)/1e9} s")
 
-    val flattenedTrainLabels = models.map(_._2._3).flatMap(x => x)
-    val flattenedTrainPredictions = models.map(_._2._4).flatMap(x => x)
+    val flattenedTrainLabels = models.map(_._2).map { case (_, _, labels, _) => labels }.flatMap(x => x)
+    val trainEvals = (0 until lambdas.size).map { idx =>
+      val flattenedTrainPredictions = models.map(_._2).flatMap { case (_, _, _, r) => r(idx) }
+      MulticlassClassifierEvaluator(flattenedTrainPredictions, flattenedTrainLabels, numClasses)
+    }
 
-    val trainEval = MulticlassClassifierEvaluator(flattenedTrainPredictions, flattenedTrainLabels, numClasses)
-    DCSolverState(gamma, kmeans, models.mapValues { case (x, w, _, _) => (x, w) }, trainEval)
+    DCSolverState(lambdas, gamma, kmeans, models.mapValues { case (x, as, _, _) => (x, as) }, trainEvals)
   }
 
 }
-
-
-

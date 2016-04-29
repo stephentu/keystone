@@ -56,15 +56,18 @@ object MnistDCSolver extends Serializable with Logging {
         .cache())
 
     val dcsolver = DCSolver.fit(
-      train, numClasses, conf.lambda, conf.gamma, conf.numPartitions, conf.kmeansSampleSize, kmeansSeed)
+      train, numClasses, conf.lambdas, conf.gamma,
+      conf.numPartitions, conf.kmeansSampleSize, kmeansSeed)
 
-    val trainEval = dcsolver.trainEval
-    logInfo("TRAIN Acc is " + (100 * trainEval.totalAccuracy) + "%")
-    logInfo("TRAIN Error is " + (100 * trainEval.totalError) + "%")
+    conf.lambdas.zip(dcsolver.trainEvals).foreach { case (lambda, trainEval) =>
+      logInfo(s"[lambda=${lambda}] TRAIN Acc is ${(100 * trainEval.totalAccuracy)} %")
+      logInfo(s"[lambda=${lambda}] TRAIN Acc is ${(100 * trainEval.totalError)} %")
+    }
 
-    val testEval = dcsolver.metrics(test, numClasses)
-    logInfo("TEST Acc is " + (100 * testEval.totalAccuracy) + "%")
-    logInfo("TEST Error is " + (100 * testEval.totalError) + "%")
+    conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
+      logInfo(s"[lambda=${lambda}] TEST Acc is ${(100 * testEval.totalAccuracy)} %")
+      logInfo(s"[lambda=${lambda}] TEST Acc is ${(100 * testEval.totalError)} %")
+    }
 
     val endTime = System.nanoTime()
     logInfo(s"Pipeline took ${(endTime - startTime)/1e9} s")
@@ -76,7 +79,7 @@ object MnistDCSolver extends Serializable with Logging {
       testLocation: String = "",
       numPartitions: Int = 10,
       kmeansSampleSize: Double = 0.1,
-      lambda: Double = 0.0,
+      lambdas: Seq[Double] = Seq.empty,
       gamma: Double = 0,
       seed: Long = 0)
 
@@ -87,7 +90,7 @@ object MnistDCSolver extends Serializable with Logging {
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
     opt[Int]("numPartitions") required() action { (x,c) => c.copy(numPartitions=x) }
     opt[Double]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
-    opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
+    opt[Seq[Double]]("lambdas") required() action { (x,c) => c.copy(lambdas=x) }
     opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
   }.parse(args, MnistDCSolverConfig()).get
