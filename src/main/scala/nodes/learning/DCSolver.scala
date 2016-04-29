@@ -100,7 +100,7 @@ case class DCSolverYuchenState(
       testAccums.unpersist(true)
       testAccums = newTestAccums
 
-      modelBC.destroy()
+      //modelBC.destroy() // LEAK FOR NOW
       // TODO: truncate this lineage?
     }
 
@@ -124,17 +124,14 @@ object DCSolverYuchen extends Logging {
 
     val sc = train.labeledData.context
 
-    // TODO: FIXME
-    val shuffledTrain = if (false) {
-      val rng = new util.Random(permutationSeed)
-      val pi = sc.parallelize(rng.shuffle((0 until train.labeledData.count().toInt).toIndexedSeq), numPartitions)
-      // TODO: we might want to not persist this stage so we don't have to materialize 2X of the train data
-      val shuffledTrain = pi.zip(train.labeledData).sortByKey().map(_._2).repartition(numPartitions).cache()
-      shuffledTrain.count()
-      shuffledTrain
-    } else {
-      train.labeledData
-    }
+    val rng = new util.Random(permutationSeed)
+    val pi: Array[Int] = rng.shuffle((0 until train.labeledData.count().toInt).toIndexedSeq).toArray
+    val piBC = sc.broadcast(pi)
+
+    val shuffledTrain = train.labeledData.zipWithIndex.map { case (elem, idx) => (piBC.value.apply(idx.toInt), elem) }.sortByKey().map(_._2).repartition(numPartitions).cache()
+    shuffledTrain.count()
+
+    piBC.destroy()
 
     val models = shuffledTrain.mapPartitionsWithIndex { case (partId, partition) =>
       val partitionSeq = partition.toSeq
@@ -149,6 +146,16 @@ object DCSolverYuchen extends Logging {
       val localSolveStartTime = System.nanoTime()
       val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
       logInfo(s"[${partId}] Local solve took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+
+      val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+      val trainLabels = partitionSeq.map(_._1)
+      assert(predictions.size == trainLabels.size)
+
+      val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+      val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
+      val trainAccRate = 1.0 - trainErrorRate
+
+      logInfo(s"[${partId}] localTrainEval acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
       Iterator.single((partId, (Xtrain, alphaStar)))
     }.cache()
