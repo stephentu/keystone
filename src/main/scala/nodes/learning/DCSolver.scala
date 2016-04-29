@@ -101,10 +101,11 @@ case class DCSolverYuchenState(
         Iterator.single(accum)
       }.cache()
       newTestAccums.count()
-      testAccums.unpersist(true)
+      testAccums.unpersist()
       testAccums = newTestAccums
 
       //modelBC.destroy() // LEAK FOR NOW
+      modelBC.unpersist()
       // TODO: truncate this lineage?
     }
 
@@ -132,7 +133,12 @@ object DCSolverYuchen extends Logging {
     val pi: Array[Int] = rng.shuffle((0 until train.labeledData.count().toInt).toIndexedSeq).toArray
     val piBC = sc.broadcast(pi)
 
-    val shuffledTrain = train.labeledData.zipWithIndex.map { case (elem, idx) => (piBC.value.apply(idx.toInt), elem) }.sortByKey().map(_._2).repartition(numPartitions).cache()
+    val shuffledTrain = train.labeledData
+      .zipWithIndex
+      .map { case (elem, idx) => (piBC.value.apply(idx.toInt), elem) }
+      .sortByKey(true, numPartitions)
+      .map(_._2)
+      .cache()
     shuffledTrain.count()
 
     piBC.destroy()
