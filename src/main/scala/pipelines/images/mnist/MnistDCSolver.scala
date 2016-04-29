@@ -60,13 +60,11 @@ object MnistDCSolver extends Serializable with Logging {
       conf.numPartitions, conf.kmeansSampleSize, kmeansSeed)
 
     conf.lambdas.zip(dcsolver.trainEvals).foreach { case (lambda, trainEval) =>
-      logInfo(s"[lambda=${lambda}] TRAIN Acc is ${(100 * trainEval.totalAccuracy)} %")
-      logInfo(s"[lambda=${lambda}] TRAIN Acc is ${(100 * trainEval.totalError)} %")
+      logInfo(s"[lambda=${lambda}] TRAIN Acc: ${(100 * trainEval.totalAccuracy)}%, Err: ${(100 * trainEval.totalError)}%")
     }
 
     conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
-      logInfo(s"[lambda=${lambda}] TEST Acc is ${(100 * testEval.totalAccuracy)} %")
-      logInfo(s"[lambda=${lambda}] TEST Acc is ${(100 * testEval.totalError)} %")
+      logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
     }
 
     val endTime = System.nanoTime()
