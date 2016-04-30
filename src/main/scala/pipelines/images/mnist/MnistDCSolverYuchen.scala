@@ -42,6 +42,7 @@ object MnistDCSolverYuchen extends Serializable with Logging {
         // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
         .map(x => (x(0).toInt - 1, x(1 until x.length)))
         .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
+        .repartition(conf.numPartitions)
         .cache())
 
     val test = LabeledData(
@@ -49,18 +50,17 @@ object MnistDCSolverYuchen extends Serializable with Logging {
         // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
         .map(x => (x(0).toInt - 1, x(1 until x.length)))
         .map { case (y, x) => (y, (x * (2.0 / 255.0)) - 1.0) }
+        .repartition(conf.numPartitions)
         .cache())
 
     val dcsolver = DCSolverYuchen.fit(
-      train, numClasses, conf.lambda, conf.gamma, conf.numPartitions, conf.seed)
+      train, numClasses, conf.lambdas, conf.gamma, conf.numPartitions, conf.seed)
 
-    //val trainEval = dcsolver.trainEval
-    //logInfo("TRAIN Acc is " + (100 * trainEval.totalAccuracy) + "%")
-    //logInfo("TRAIN Error is " + (100 * trainEval.totalError) + "%")
+    // TODO(stephentu): do we want train acc?
 
-    val testEval = dcsolver.metrics(test, numClasses)
-    logInfo("TEST Acc is " + (100 * testEval.totalAccuracy) + "%")
-    logInfo("TEST Error is " + (100 * testEval.totalError) + "%")
+    conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
+      logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
+    }
 
     val endTime = System.nanoTime()
     logInfo(s"Pipeline took ${(endTime - startTime)/1e9} s")
@@ -71,7 +71,7 @@ object MnistDCSolverYuchen extends Serializable with Logging {
       trainLocation: String = "",
       testLocation: String = "",
       numPartitions: Int = 10,
-      lambda: Double = 0.0,
+      lambdas: Seq[Double] = Seq.empty,
       gamma: Double = 0,
       seed: Long = 0)
 
@@ -81,7 +81,7 @@ object MnistDCSolverYuchen extends Serializable with Logging {
     opt[String]("trainLocation") required() action { (x,c) => c.copy(trainLocation=x) }
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
     opt[Int]("numPartitions") required() action { (x,c) => c.copy(numPartitions=x) }
-    opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
+    opt[Seq[Double]]("lambdas") required() action { (x,c) => c.copy(lambdas=x) }
     opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
   }.parse(args, MnistDCSolverConfig()).get

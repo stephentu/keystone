@@ -65,19 +65,22 @@ case class DCSolverState(
 }
 
 case class DCSolverYuchenState(
+  lambdas: Seq[Double],
   gamma: Double,
-  models: RDD[(Int, (DenseMatrix[Double], DenseMatrix[Double]))] /* it is assumed each entry in the RDD belongs to a partition */
+  models: RDD[(Int, (DenseMatrix[Double], Seq[DenseMatrix[Double]]))] /* it is assumed each entry in the RDD belongs to a partition */
 ) extends Logging {
 
 
   def metrics(test: LabeledData[Int, DenseVector[Double]],
-              numClasses: Int): MulticlassMetrics = {
+              numClasses: Int): Seq[MulticlassMetrics] = {
 
     val nModels = models.count()
     assert(nModels == models.partitions.size)
 
     var testAccums = test.labeledData.mapPartitions { partition =>
-      Iterator.single(DenseMatrix.zeros[Double](partition.size, numClasses))
+      val sz = partition.size
+      assert(sz > 0)
+      Iterator.single(lambdas.map { _ => DenseMatrix.zeros[Double](sz, numClasses) })
     }.cache()
     testAccums.count()
 
@@ -87,18 +90,21 @@ case class DCSolverYuchenState(
       val (_, model) = models.filter { case (curModelId, _) => curModelId == modelId }.collect().head
       val modelBC = test.labeledData.context.broadcast(model)
 
-      val newTestAccums = testAccums.zipPartitions(test.labeledData) { case (accums, partition) =>
-        val accum = accums.next()
+      val newTestAccums = testAccums.zipPartitions(test.labeledData) { case (accumsIter, partition) =>
+        val accums = accumsIter.next()
         val partitionSeq = partition.toSeq
 
         val Xtest = MatrixUtils.rowsToMatrix(partitionSeq.map(_._2)) // DenseMatrix[Double]
         val Ytest = partitionSeq.map(_._1) // Seq[Int]
 
-        val (xTrainPart, alphaStarPart) = modelBC.value
+        val (xTrainPart, alphaStarsPart) = modelBC.value
         val KtesttrainPart = GaussianKernel(gamma).apply(Xtest, xTrainPart)
 
-        accum += KtesttrainPart * alphaStarPart
-        Iterator.single(accum)
+        accums.zip(alphaStarsPart).foreach { case (accum, alphaStarPart) =>
+          accum += KtesttrainPart * alphaStarPart
+        }
+
+        Iterator.single(accums)
       }.cache()
       newTestAccums.count()
       testAccums.unpersist()
@@ -109,12 +115,17 @@ case class DCSolverYuchenState(
       // TODO: truncate this lineage?
     }
 
-    MulticlassClassifierEvaluator(
-      testAccums.map { evaluations =>
-        MatrixUtils.matrixToRowArray(evaluations * (1.0 / nModels.toDouble)).map(MaxClassifier.apply).toSeq
-      }.flatMap(x => x),
-      test.labels,
-      numClasses)
+    (0 until lambdas.size).map { idx =>
+      MulticlassClassifierEvaluator(
+        testAccums.map { evaluations: Seq[DenseMatrix[Double]] =>
+          assert(lambdas.size == evaluations.size)
+          val thisEvaluations = evaluations(idx)
+          assert(thisEvaluations.cols == numClasses)
+          MatrixUtils.matrixToRowArray(evaluations(idx) * (1.0 / nModels.toDouble)).map(MaxClassifier.apply).toSeq
+        }.flatMap(x => x),
+        test.labels,
+        numClasses)
+    }
   }
 }
 
@@ -122,7 +133,7 @@ object DCSolverYuchen extends Logging {
 
   def fit(train: LabeledData[Int, DenseVector[Double]],
           numClasses: Int,
-          lambda: Double,
+          lambdas: Seq[Double],
           gamma: Double,
           numPartitions: Int,
           permutationSeed: Long): DCSolverYuchenState = {
@@ -153,26 +164,30 @@ object DCSolverYuchen extends Logging {
       val Ktrain = GaussianKernel(gamma).apply(Xtrain)
       logInfo(s"[${partId}] Local kernel gen took ${(System.nanoTime() - localKernelStartTime)/1e9} s")
 
-      val localSolveStartTime = System.nanoTime()
-      val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
-      logInfo(s"[${partId}] Local solve took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+      val alphaStars = lambdas.map { lambda =>
+        val localSolveStartTime = System.nanoTime()
+        val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
+        logInfo(s"[${partId}] Local solve [lambda=${lambda}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
 
-      val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
-      val trainLabels = partitionSeq.map(_._1)
-      assert(predictions.size == trainLabels.size)
+        val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+        val trainLabels = partitionSeq.map(_._1)
+        assert(predictions.size == trainLabels.size)
 
-      val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
-      val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
-      val trainAccRate = 1.0 - trainErrorRate
+        val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+        val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
+        val trainAccRate = 1.0 - trainErrorRate
 
-      logInfo(s"[${partId}] localTrainEval acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+        logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
-      Iterator.single((partId, (Xtrain, alphaStar)))
+        alphaStar
+      }
+
+      Iterator.single((partId, (Xtrain, alphaStars)))
     }.cache()
     models.count()
     shuffledTrain.unpersist()
 
-    DCSolverYuchenState(gamma, models)
+    DCSolverYuchenState(lambdas, gamma, models)
   }
 
 }
