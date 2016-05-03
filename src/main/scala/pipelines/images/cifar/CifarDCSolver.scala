@@ -50,15 +50,21 @@ object CifarDCSolver extends Serializable with Logging {
         }.repartition(conf.trainParts).cache(),
         "trainData"))
 
+    val testAll = sc.textFile(conf.testLocation, conf.testParts).map { row =>
+      val parts = row.split(',')
+      val labelFeats = parts.tail.map(_.toDouble)
+      // include the image name
+      (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
+    }.repartition(conf.testParts.cache()
+
+    
+    
     val test = LabeledData(
-      materialize(
-        sc.textFile(conf.testLocation, conf.testParts).map { row =>
-          val parts = row.split(',')
-          // ignore the image name
-          val labelFeats = parts.tail.map(_.toDouble)
-          (labelFeats(0).toInt, DenseVector(labelFeats.tail))
-        }.repartition(conf.testParts).cache(),
+      // now 
+      materialize(testAll.map(x => (x._1, x._2)
         "testData"))
+
+    
 
     val dcsolver = DCSolver.fit(
       train, numClasses, conf.lambdas, conf.gamma, conf.numModels, conf.kmeansSampleSize, conf.seed)
@@ -66,8 +72,8 @@ object CifarDCSolver extends Serializable with Logging {
     conf.lambdas.zip(dcsolver.trainEvals).foreach { case (lambda, trainEval) =>
       logInfo(s"[lambda=${lambda}] TRAIN Acc: ${(100 * trainEval.totalAccuracy)}%, Err: ${(100 * trainEval.totalError)}%")
     }
-
-    conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
+    
+    conf.lambdas.zip(dcsolver.augmentedMetrics(test, numClasses, testImgNames)).foreach { case (lambda, testEval) =>
       logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
     }
 
