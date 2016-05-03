@@ -50,16 +50,14 @@ object CifarDCSolver extends Serializable with Logging {
         }.repartition(conf.trainParts).cache(),
         "trainData"))
 
-    val testAll = sc.textFile(conf.testLocation, conf.testParts).map { row =>
+    val testAll = materialize(sc.textFile(conf.testLocation, conf.testParts).map { row =>
       val parts = row.split(',')
       val labelFeats = parts.tail.map(_.toDouble)
       // include the image name
       (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
-    }.repartition(conf.testParts.cache()
+    }.repartition(conf.testParts), "testData")
     
-    val test = LabeledData(
-      materialize(testAll.map(x => (x._2, x._3)
-        "testData"))
+    val test = LabeledData(testAll.map(x => (x._2, x._3)))
 
     val testImgNames = testAll.map(x => x._1)
 

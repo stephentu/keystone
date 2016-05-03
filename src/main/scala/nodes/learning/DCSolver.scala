@@ -4,7 +4,7 @@ import breeze.linalg._
 import breeze.numerics._
 
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
-import evaluation.{MulticlassClassifierEvaluator, MulticlassMetrics}
+import evaluation.{AugmentedExamplesEvaluator, MulticlassClassifierEvaluator, MulticlassMetrics}
 import loaders.LabeledData
 import nodes.stats.GaussianKernel
 import nodes.util._
@@ -62,40 +62,29 @@ case class DCSolverState(
     }
   }
   
-  def augmentedMetrics(test: LabeledData[Int, DenseVector[Double]],
-              numClasses: Int /* should not need to pass this around */,
-              testImageIdsAugmented: RDD[String]):
-    Seq[MulticlassMetrics] = {
-    val augmentImgSize=24
+  def augmentedMetrics(
+      test: LabeledData[Int, DenseVector[Double]],
+      numClasses: Int /* should not need to pass this around */,
+      testImageIdsAugmented: RDD[String]): Seq[MulticlassMetrics] = {
 
     val testData = models.partitioner.map { partitioner =>
-      kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData).groupByKey(partitioner)
+      kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData.zip(testImageIdsAugmented)).groupByKey(partitioner)
     }.getOrElse {
       logWarning("Could not find partitioner-- join could be slow")
-      kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData).groupByKey()
+      kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData.zip(testImageIdsAugmented)).groupByKey()
     }
-    val numTestAugment = 10 // 4 corners, center and flips of each of the 5
-    val testImagesAugmented = CenterCornerPatcher(augmentImgSize, augmentImgSize, true).apply(
-      testImages)
-    
-    // Create augmented image-ids by assigning a unique id to each test image
-    // and then augmenting the id
-    val testImageIdsAugmented = new LabelAugmenter(numTestAugment).apply(
-      testImages.zipWithUniqueId.map(x => x._2))
-
-    val testLabelsAugmented = new LabelAugmenter(numTestAugment).apply(LabelExtractor(testData))
 
     val testEvaluationStartTime = System.nanoTime()
-    val testEvaluation = models.join(testImagesAugmented).mapValues { case ((xtrain, alphaStars), rhs) =>
+    val testEvaluation = models.join(testData).mapValues { case ((xtrain, alphaStars), rhs) =>
       val rhsSeq = rhs.toSeq
-      val Xtest = MatrixUtils.rowsToMatrix(rhsSeq.map(_._2))
-      // Here: Use testLabelsAugmented
-      val Ytest = rhsSeq.map(_._1)
+      // every element in rhs is ((Int, DV[Double]), String)
+      val Xtest = MatrixUtils.rowsToMatrix(rhsSeq.map(_._1._2))
+      val Ytest = rhsSeq.map(_._1._1)
       val Ktesttrain = GaussianKernel(gamma).apply(Xtest, xtrain)
       val allTestPredictions = alphaStars.map { alphaStar =>
-        MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar).map(MaxClassifier.apply)
+        MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar)
       }
-      (Ytest, allTestPredictions)
+      (Ytest, allTestPredictions, rhsSeq.map(_._2))
     }.cache()
     testEvaluation.count()
     logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
@@ -103,8 +92,9 @@ case class DCSolverState(
     //Here use flattenedTestLabels
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
     (0 until lambdas.size).map { idx =>
-      val flattenedTestPredictions = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
-      AugmentedExamplesEvaluator(testImageIdsAugmented, flattenedTestPredictions, flattenedTestLabels, numClasses)
+      val flattenedTestPredictions: RDD[DenseVector[Double]] = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
+      val flattenedImageIds = testEvaluation.map(_._2._3)
+      AugmentedExamplesEvaluator(flattenedImageIds, flattenedTestPredictions, flattenedTestLabels, numClasses)
     }
   }
 
