@@ -56,15 +56,12 @@ object CifarDCSolver extends Serializable with Logging {
       // include the image name
       (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
     }.repartition(conf.testParts.cache()
-
-    
     
     val test = LabeledData(
-      // now 
-      materialize(testAll.map(x => (x._1, x._2)
+      materialize(testAll.map(x => (x._2, x._3)
         "testData"))
 
-    
+    val testImgNames = testAll.map(x => x._1)
 
     val dcsolver = DCSolver.fit(
       train, numClasses, conf.lambdas, conf.gamma, conf.numModels, conf.kmeansSampleSize, conf.seed)
