@@ -1,6 +1,6 @@
 #!/bin/bash
 
-FWDIR="$(cd irname $0 pwd)"
+FWDIR="$(cd dirname $0 pwd)"
 pushd $FWDIR
 
 export SPARK_HOME="/root/spark"
@@ -18,7 +18,7 @@ SEED=8975323
 METHOD="dcsvm"
 LOG_SUFFIX=`date + "%Y_%m_%d_%H_%M_%S"`
 
-OMP_NUM_THREADS=1 KEYSTONE_MEM=200g ./bin/run-pipeline.sh \
+OMP_NUM_THREADS=8 KEYSTONE_MEM=200g ./bin/run-pipeline.sh \
   pipelines.images.cifar.$CLASS \
   --trainLocation $CIFAR_TRAIN_DIR \
   --testLocation $CIFAR_TEST_DIR \
