@@ -50,12 +50,17 @@ object AugmentedExamplesEvaluator extends Serializable {
     val namedPreds = names.zip(predicted.zip(actualLabels))
 
     // group by name to get all the predicted values for a name
-    val groupedPreds = namedPreds.groupByKey(names.partitions.length).map { case (group, iter) =>
+    val groupedPreds = namedPreds.groupByKey(names.partitions.length).filter { case (group, iter) =>
+      !iter.isEmpty
+    }.map { case (group, iter) =>
       val predActuals = iter.toArray // this is a array of tuples
       val predsForName = predActuals.map(_._1)
-      assert(predActuals.map(_._2).distinct.size == 1)
+      if (predActuals.map(_._2).distinct.size > 1) {
+        println("Got actuals " + predActuals.map(_._2).distinct.mkString(","))
+      }
+      assert(predActuals.map(_._2).distinct.size == 1,
+        s"For $group expected one class, got ${predActuals.map(_._2).distinct.size} classes")
       val actualForName: Int = predActuals.map(_._2).head
-
       (predsForName, actualForName)
     }.cache()
 

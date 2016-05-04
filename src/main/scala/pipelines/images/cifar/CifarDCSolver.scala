@@ -57,31 +57,29 @@ object CifarDCSolver extends Serializable with Logging {
       (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
     }.repartition(conf.testParts), "testData")
     
-    val test = LabeledData(testAll.map(x => (x._2, x._3)))
-
-    val testImgNames = testAll.map(x => x._1)
-
-    val dcsolver = DCSolver.fit(
-      train, numClasses, conf.lambdas, conf.gamma, conf.numModels, conf.kmeansSampleSize, conf.seed)
-
-    conf.lambdas.zip(dcsolver.trainEvals).foreach { case (lambda, trainEval) =>
-      logInfo(s"[lambda=${lambda}] TRAIN Acc: ${(100 * trainEval.totalAccuracy)}%, Err: ${(100 * trainEval.totalError)}%")
-    }
+    if (conf.useYuchen) {
+      val dcsolver = DCSolverYuchen.fit(
+        train, numClasses, conf.lambdas, conf.gamma, conf.numPartitions, conf.seed)
     
+      conf.lambdas.zip(dcsolver.trainEvals.zip(dcsolver.augmentedMetrics(testAll,numClasses))).foreach { case (lambda, (trainEval, testEval)) =>
+        trainAcc = (100 * trainEval.totalAccuracy)
+        testAcc = (100* testEval.totalAccuracy)
+        println(s"LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}_TEST_ACC_${testAcc}")
+      }
+      val endTime = System.nanoTime()
+      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+    } else {
+      val dcsolver = DCSolver.fit(
+        train, numClasses, conf.lambdas, conf.gamma, conf.numModels, conf.kmeansSampleSize, conf.seed)
     
-    conf.lambdas.zip(dcsolver.augmentedMetrics(test, numClasses, testImgNames)).foreach { case (lambda, testEval) =>
-      logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
+      conf.lambdas.zip(dcsolver.trainEvals.zip(dcsolver.augmentedMetrics(testAll,numClasses))).foreach { case (lambda, (trainEval, testEval)) =>
+        trainAcc = (100 * trainEval.totalAccuracy)
+        testAcc = (100* testEval.totalAccuracy)
+        println(s"LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}_TEST_ACC_${testAcc}")
+      }
+      val endTime = System.nanoTime()
+      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
     }
-    
-
-    /*
-    conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
-      logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
-    }
-    */
-
-    val endTime = System.nanoTime()
-    logInfo(s"Pipeline took ${(endTime - startTime)/1e9} s")
     null
   }
 
@@ -91,6 +89,7 @@ object CifarDCSolver extends Serializable with Logging {
       trainParts: Int = 0,
       testParts: Int = 0,
       numModels: Int = 10,
+      numPartitions: Int = 128,
       kmeansSampleSize: Double = 0.1,
       lambdas: Seq[Double] = Seq.empty,
       gamma: Double = 0,
@@ -107,7 +106,8 @@ object CifarDCSolver extends Serializable with Logging {
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
     opt[Int]("trainParts") required() action { (x,c) => c.copy(trainParts=x) } validate isPositive("trainParts")
     opt[Int]("testParts") required() action { (x,c) => c.copy(testParts=x) } validate isPositive("testParts")
-    opt[Int]("numModels") required() action { (x,c) => c.copy(numModels=x) } validate isPositive("numModels")
+    opt[Int]("numModels") action { (x,c) => c.copy(numModels=x) } validate isPositive("numModels")
+    opt[Int]("numPartitions") action { (x,c) => c.copy(numPartitions=x) } validate isPositive("numPartitions")
     opt[Double]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
     opt[Seq[Double]]("lambdas") required() action { (x,c) => c.copy(lambdas=x) }
     opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }

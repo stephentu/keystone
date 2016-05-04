@@ -53,7 +53,8 @@ case class DCSolverState(
       (Ytest, allTestPredictions)
     }.cache()
     testEvaluation.count()
-    logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
+    val totalTestTime = (System.nanoTime() - testEvaluationStartTime)/1e9
+    println(s"TEST_TIME_${totalTestTime}")
 
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
     (0 until lambdas.size).map { idx =>
@@ -63,36 +64,37 @@ case class DCSolverState(
   }
   
   def augmentedMetrics(
-      test: LabeledData[Int, DenseVector[Double]],
-      numClasses: Int /* should not need to pass this around */,
-      testImageIdsAugmented: RDD[String]): Seq[MulticlassMetrics] = {
+      test: RDD[(String, Int, DenseVector[Double])],
+      numClasses: Int /* should not need to pass this around */): Seq[MulticlassMetrics] = {
 
     val testData = models.partitioner.map { partitioner =>
-      kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData.zip(testImageIdsAugmented)).groupByKey(partitioner)
+      kmeans(test.map(_._3)).map(DCSolver.oneHotToNumber).zip(test).groupByKey(partitioner)
     }.getOrElse {
       logWarning("Could not find partitioner-- join could be slow")
-      kmeans(test.data).map(DCSolver.oneHotToNumber).zip(test.labeledData.zip(testImageIdsAugmented)).groupByKey()
+      kmeans(test.map(_._3)).map(DCSolver.oneHotToNumber).zip(test).groupByKey()
     }
 
     val testEvaluationStartTime = System.nanoTime()
     val testEvaluation = models.join(testData).mapValues { case ((xtrain, alphaStars), rhs) =>
       val rhsSeq = rhs.toSeq
       // every element in rhs is ((Int, DV[Double]), String)
-      val Xtest = MatrixUtils.rowsToMatrix(rhsSeq.map(_._1._2))
-      val Ytest = rhsSeq.map(_._1._1)
+      val Xtest = MatrixUtils.rowsToMatrix(rhsSeq.map(_._3))
+      val Ytest = rhsSeq.map(_._2)
       val Ktesttrain = GaussianKernel(gamma).apply(Xtest, xtrain)
       val allTestPredictions = alphaStars.map { alphaStar =>
         MatrixUtils.matrixToRowArray(Ktesttrain * alphaStar)
       }
-      (Ytest, allTestPredictions, rhsSeq.map(_._2))
+      (Ytest, allTestPredictions, rhsSeq.map(_._1))
     }.cache()
     testEvaluation.count()
-    logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
+    val totalTestTime = (System.nanoTime() - testEvaluationStartTime)/1e9
+    println(s"TEST_TIME_${totalTestTime}")
+    //logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
 
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
+    val flattenedImageIds = testEvaluation.map(_._2._3).flatMap(x => x)
     val result = (0 until lambdas.size).map { idx =>
       val flattenedTestPredictions = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
-      val flattenedImageIds = testEvaluation.map(_._2._3).flatMap(x => x)
       AugmentedExamplesEvaluator(flattenedImageIds, flattenedTestPredictions, flattenedTestLabels, numClasses)
     }
     logInfo("Done augmented example evaluation")
@@ -215,8 +217,9 @@ object DCSolverYuchen extends Logging {
         val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
         val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
         val trainAccRate = 1.0 - trainErrorRate
-
-        logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+        
+        println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
+        //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
         alphaStar
       }
@@ -266,7 +269,7 @@ object DCSolver extends Logging {
     val models = kmeans(train.data)
       .map(oneHotToNumber)
       .zip(train.labeledData)
-      .groupByKey()
+      .groupByKey(numPartitions)
       .map { case (partId, partition) =>
           val elems = partition.toSeq
           val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
@@ -293,8 +296,8 @@ object DCSolver extends Logging {
             val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
             val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
             val trainAccRate = 1.0 - trainErrorRate
-
-            logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+            println(s"PARTID_${partID}_LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}")
+            //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
             (alphaStar, predictions)
           }
