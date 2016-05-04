@@ -5,7 +5,7 @@ import breeze.numerics._
 
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import loaders.{CsvDataLoader, LabeledData}
-import nodes.learning.DCSolver
+import nodes.learning.{DCSolver, DCSolverYuchen}
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.SparkContext._
@@ -61,10 +61,9 @@ object CifarDCSolver extends Serializable with Logging {
       val dcsolver = DCSolverYuchen.fit(
         train, numClasses, conf.lambdas, conf.gamma, conf.numPartitions, conf.seed)
     
-      conf.lambdas.zip(dcsolver.trainEvals.zip(dcsolver.augmentedMetrics(testAll,numClasses))).foreach { case (lambda, (trainEval, testEval)) =>
-        trainAcc = (100 * trainEval.totalAccuracy)
-        testAcc = (100* testEval.totalAccuracy)
-        println(s"LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}_TEST_ACC_${testAcc}")
+      conf.lambdas.zip(dcsolver.augmentedMetrics(testAll,numClasses)).foreach { case (lambda, testEval) =>
+        val testAcc = (100* testEval.totalAccuracy)
+        println(s"LAMBDA_${lambda}_TEST_ACC_${testAcc}")
       }
       val endTime = System.nanoTime()
       println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
@@ -73,8 +72,8 @@ object CifarDCSolver extends Serializable with Logging {
         train, numClasses, conf.lambdas, conf.gamma, conf.numModels, conf.kmeansSampleSize, conf.seed)
     
       conf.lambdas.zip(dcsolver.trainEvals.zip(dcsolver.augmentedMetrics(testAll,numClasses))).foreach { case (lambda, (trainEval, testEval)) =>
-        trainAcc = (100 * trainEval.totalAccuracy)
-        testAcc = (100* testEval.totalAccuracy)
+        val trainAcc = (100 * trainEval.totalAccuracy)
+        val testAcc = (100* testEval.totalAccuracy)
         println(s"LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}_TEST_ACC_${testAcc}")
       }
       val endTime = System.nanoTime()
@@ -93,7 +92,8 @@ object CifarDCSolver extends Serializable with Logging {
       kmeansSampleSize: Double = 0.1,
       lambdas: Seq[Double] = Seq.empty,
       gamma: Double = 0,
-      seed: Long = 0)
+      seed: Long = 0,
+      useYuchen: Boolean = false)
 
   def parse(args: Array[String]): CifarDCSolverConfig = new OptionParser[CifarDCSolverConfig](appName) {
 
@@ -112,6 +112,7 @@ object CifarDCSolver extends Serializable with Logging {
     opt[Seq[Double]]("lambdas") required() action { (x,c) => c.copy(lambdas=x) }
     opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
+    opt[Boolean]("useYuchen") required() action { (x,c) => c.copy(useYuchen=x) }
   }.parse(args, CifarDCSolverConfig()).get
 
   /**

@@ -168,6 +168,63 @@ case class DCSolverYuchenState(
         numClasses)
     }
   }
+  def augmentedMetrics(
+      test: RDD[(String, Int, DenseVector[Double])],
+      numClasses: Int /* should not need to pass this around */): Seq[MulticlassMetrics] = {
+
+    val nModels = models.count()
+    assert(nModels == models.partitions.size)
+
+    var testAccums = test.mapPartitions { partition =>
+      val sz = partition.size
+      assert(sz > 0)
+      Iterator.single(lambdas.map { _ => DenseMatrix.zeros[Double](sz, numClasses) })
+    }.cache()
+    testAccums.count()
+
+    (0 until nModels.toInt).foreach { modelId =>
+
+      // not sure of a better way to do this
+      val (_, model) = models.filter { case (curModelId, _) => curModelId == modelId }.collect().head
+      val modelBC = test.context.broadcast(model)
+
+      val newTestAccums = testAccums.zipPartitions(test) { case (accumsIter, partition) =>
+        val accums = accumsIter.next()
+        val partitionSeq = partition.toSeq
+
+        val Xtest = MatrixUtils.rowsToMatrix(partitionSeq.map(_._3)) // DenseMatrix[Double]
+        val Ytest = partitionSeq.map(_._2) // Seq[Int]
+
+        val (xTrainPart, alphaStarsPart) = modelBC.value
+        val KtesttrainPart = GaussianKernel(gamma).apply(Xtest, xTrainPart)
+
+        accums.zip(alphaStarsPart).foreach { case (accum, alphaStarPart) =>
+          accum += KtesttrainPart * alphaStarPart
+        }
+
+        Iterator.single(accums)
+      }.cache()
+      newTestAccums.count()
+      testAccums.unpersist()
+      testAccums = newTestAccums
+
+      //modelBC.destroy() // LEAK FOR NOW
+      modelBC.unpersist()
+      // TODO: truncate this lineage?
+    }
+
+    val flattenedTestLabels = test.map(_._2)
+    val flattenedImageIds = test.map(_._1).flatMap(x => x)
+    (0 until lambdas.size).map { idx =>
+      val flattenedTestPredictions = testAccums.map { evaluations =>
+        assert(lambdas.size == evaluations.size)
+        val thisEvaluations = evaluations(idx)
+        assert(thisEvaluations.cols == numClasses)
+        MatrixUtils.matrixToRowArray(evaluations(idx) * (1.0 / nModels.toDouble))
+      }.flatMap(x=>x)
+      AugmentedExamplesEvaluator(flattenedImageIds, flattenedTestPredictions, flattenedTestLabels, numClasses)
+    }
+  }
 }
 
 object DCSolverYuchen extends Logging {
@@ -296,7 +353,7 @@ object DCSolver extends Logging {
             val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
             val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
             val trainAccRate = 1.0 - trainErrorRate
-            println(s"PARTID_${partID}_LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}")
+            println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
             //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
             (alphaStar, predictions)
