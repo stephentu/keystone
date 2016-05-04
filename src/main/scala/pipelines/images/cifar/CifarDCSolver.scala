@@ -68,9 +68,17 @@ object CifarDCSolver extends Serializable with Logging {
       logInfo(s"[lambda=${lambda}] TRAIN Acc: ${(100 * trainEval.totalAccuracy)}%, Err: ${(100 * trainEval.totalError)}%")
     }
     
+    
     conf.lambdas.zip(dcsolver.augmentedMetrics(test, numClasses, testImgNames)).foreach { case (lambda, testEval) =>
       logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
     }
+    
+
+    /*
+    conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
+      logInfo(s"[lambda=${lambda}] TEST Acc: ${(100 * testEval.totalAccuracy)}%, Err: ${(100 * testEval.totalError)}%")
+    }
+    */
 
     val endTime = System.nanoTime()
     logInfo(s"Pipeline took ${(endTime - startTime)/1e9} s")

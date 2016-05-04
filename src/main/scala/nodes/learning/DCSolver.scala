@@ -89,13 +89,14 @@ case class DCSolverState(
     testEvaluation.count()
     logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
 
-    //Here use flattenedTestLabels
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
-    (0 until lambdas.size).map { idx =>
-      val flattenedTestPredictions: RDD[DenseVector[Double]] = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
-      val flattenedImageIds = testEvaluation.map(_._2._3)
+    val result = (0 until lambdas.size).map { idx =>
+      val flattenedTestPredictions = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
+      val flattenedImageIds = testEvaluation.map(_._2._3).flatMap(x => x)
       AugmentedExamplesEvaluator(flattenedImageIds, flattenedTestPredictions, flattenedTestLabels, numClasses)
     }
+    logInfo("Done augmented example evaluation")
+    result
   }
 
 
