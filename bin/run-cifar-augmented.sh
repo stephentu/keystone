@@ -12,18 +12,22 @@ export MEM=180g
 
 MASTER=`cat /root/spark-ec2/cluster-url`
 CLASS=CifarDCSolver
-#CLASS=CifarDCSolverYuchen
 
 CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip"
 CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip"
 
-NUM_MODELS=$3
+#NUM_MODELS=$3
 #NUM_PARTITIONS=$3
-LAMBDAS=$2
-GAMMA=$1
-SEED=$4
-SOLVER="dcsvm"
-#SOLVER="dcyuchen"
+#LAMBDAS=$2
+#GAMMA=$1
+#SEED=$4
+NUM_MODELS=32
+NUM_PARTITIONS=128
+LAMBDAS=0.1
+GAMMA=0.0008
+SEED=2349284098
+#SOLVER="dcsvm"
+SOLVER="dcyuchen"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 
 export EXECUTOR_OMP_NUM_THREADS=8
@@ -32,10 +36,11 @@ OMP_NUM_THREADS=8 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   pipelines.images.cifar.$CLASS \
   --trainLocation $CIFAR_TRAIN_DIR \
   --testLocation $CIFAR_TEST_DIR \
-  --trainParts 1024 \
-  --testParts 1024 \
-  --numModels $NUM_MODELS \
+  --trainParts $NUM_PARTITIONS \
+  --testParts $NUM_PARTITIONS \
+  --numPartitions $NUM_PARTITIONS \
   --lambdas $LAMBDAS \
   --gamma $GAMMA \
+  --useYuchen true \
   --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambdas-$LAMBDAS-nummodels-$NUM_MODELS-logs-"$LOG_SUFFIX".log
 

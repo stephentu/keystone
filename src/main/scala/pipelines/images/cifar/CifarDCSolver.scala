@@ -56,6 +56,11 @@ object CifarDCSolver extends Serializable with Logging {
       // include the image name
       (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
     }.repartition(conf.testParts), "testData")
+
+    val testNum = testAll.count
+    val testNumPerPartition = testAll.mapPartitions { iter => Iterator.single(iter.size) }.collect()
+    println("testNum: " + testNum)
+    println("test per partition: " + testNumPerPartition.mkString(","))
     
     if (conf.useYuchen) {
       val dcsolver = DCSolverYuchen.fit(
