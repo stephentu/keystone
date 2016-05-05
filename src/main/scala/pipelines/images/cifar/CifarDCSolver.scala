@@ -55,7 +55,7 @@ object CifarDCSolver extends Serializable with Logging {
       val labelFeats = parts.tail.map(_.toDouble)
       // include the image name
       (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
-    }.repartition(conf.testParts), "testData")
+    }.repartition(conf.testParts).cache(), "testData")
 
     val testNum = testAll.count
     val testNumPerPartition = testAll.mapPartitions { iter => Iterator.single(iter.size) }.collect()
