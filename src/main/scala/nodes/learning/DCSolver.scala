@@ -1,5 +1,10 @@
 package nodes.learning
 
+
+import org.netlib.util.intW
+import com.github.fommil.netlib.BLAS.{getInstance=>blas}
+import com.github.fommil.netlib.LAPACK.{getInstance=>lapack}
+
 import breeze.linalg._
 import breeze.numerics._
 
@@ -293,28 +298,57 @@ object DCSolverYuchen extends Logging {
       val Ktrain = GaussianKernel(gamma).apply(Xtrain)
       logInfo(s"[${partId}] Local kernel gen took ${(System.nanoTime() - localKernelStartTime)/1e9} s")
 
-      val alphaStars = lambdas.map { lambda =>
+      if (lambdas.length == 1) {
+        // Special case 1 lambda to be more memory efficient
         val localSolveStartTime = System.nanoTime()
-        addLambdaEyeInPlace(Ktrain, lambda)
-        val alphaStar = Ktrain \ Ytrain
-        logInfo(s"[${partId}] Local solve [lambda=${lambda}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
-        subLambdaEyeInPlace(Ktrain, lambda)
+        addLambdaEyeInPlace(Ktrain, lambdas(0))
+        // val alphaStar = Ktrain \ Ytrain
+        // square: LUSolve
+        val alphaStar = DenseMatrix.zeros[Double](Ytrain.rows, Ytrain.cols)
+				// we initialize alphaStar to Ytrain ??
+        alphaStar := Ytrain
+        val piv = new Array[Int](Ktrain.rows)
+				// NOTE: we don't copy Ktrain, so it gets overwritten
+        assert(!Ktrain.isTranspose)
+        val info: Int = {
+          val info = new intW(0)
+          lapack.dgesv(Ktrain.rows, alphaStar.cols, Ktrain.data, Ktrain.offset, Ktrain.majorStride, piv, 0,
+											 alphaStar.data, alphaStar.offset, alphaStar.majorStride, info)
+          info.`val`
+        }
+       
+        if (info > 0)
+          throw new MatrixSingularException()
+        else if (info < 0)
+          throw new IllegalArgumentException()
 
-        val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+        logInfo(s"[${partId}] Local solve [lambda=${lambdas(0)}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
         val trainLabels = partitionSeq.map(_._1)
-        assert(predictions.size == trainLabels.size)
+        Iterator.single((partId, (Xtrain, Seq(alphaStar))))
+      } else {
+        val alphaStars = lambdas.map { lambda =>
+          val localSolveStartTime = System.nanoTime()
+          addLambdaEyeInPlace(Ktrain, lambda)
+          val alphaStar = Ktrain \ Ytrain
+          logInfo(s"[${partId}] Local solve [lambda=${lambda}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+          subLambdaEyeInPlace(Ktrain, lambda)
 
-        val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
-        val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
-        val trainAccRate = 1.0 - trainErrorRate
+          val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+          val trainLabels = partitionSeq.map(_._1)
+          assert(predictions.size == trainLabels.size)
 
-        println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
-        //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+          val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
+          val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
+          val trainAccRate = 1.0 - trainErrorRate
 
-        alphaStar
+          println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
+          //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
+
+          alphaStar
+        }
+        Iterator.single((partId, (Xtrain, alphaStars)))
       }
 
-      Iterator.single((partId, (Xtrain, alphaStars)))
     }.cache()
     models.count()
     shuffledTrain.unpersist()

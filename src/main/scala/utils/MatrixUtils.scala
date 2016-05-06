@@ -148,6 +148,7 @@ object MatrixUtils extends Serializable {
    */
   def squaredPDist(in: DenseMatrix[Double]): DenseMatrix[Double] = {
     val n = in.rows
+    // this allocates a n*n matrix here
     val xxt = in * in.t
 
     val norms = rowNorms(in)
@@ -157,6 +158,7 @@ object MatrixUtils extends Serializable {
     //val m2 = ones * norms.t
     //m1 + m2 - (xxt * 2.0)
 
+    // all these updates are in place
     xxt :*= (-2.0)
     xxt(::, *) :+= norms
     xxt(*, ::) :+= norms
