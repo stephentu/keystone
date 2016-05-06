@@ -62,7 +62,7 @@ case class DCSolverState(
       MulticlassClassifierEvaluator(flattenedTestPredictions, flattenedTestLabels, numClasses)
     }
   }
-  
+
   def augmentedMetrics(
       test: RDD[(String, Int, DenseVector[Double])],
       numClasses: Int /* should not need to pass this around */): Seq[MulticlassMetrics] = {
@@ -242,6 +242,24 @@ case class DCSolverYuchenState(
 
 object DCSolverYuchen extends Logging {
 
+  private def addLambdaEyeInPlace(in: DenseMatrix[Double], lambda: Double): Unit = {
+    assert(in.rows == in.cols)
+    var i = 0
+    while (i < in.rows) {
+      in(i, i) += lambda
+      i += 1
+    }
+  }
+
+  private def subLambdaEyeInPlace(in: DenseMatrix[Double], lambda: Double): Unit = {
+    assert(in.rows == in.cols)
+    var i = 0
+    while (i < in.rows) {
+      in(i, i) -= lambda
+      i += 1
+    }
+  }
+
   def fit(train: LabeledData[Int, DenseVector[Double]],
           numClasses: Int,
           lambdas: Seq[Double],
@@ -277,8 +295,10 @@ object DCSolverYuchen extends Logging {
 
       val alphaStars = lambdas.map { lambda =>
         val localSolveStartTime = System.nanoTime()
-        val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
+        addLambdaEyeInPlace(Ktrain, lambda)
+        val alphaStar = Ktrain \ Ytrain
         logInfo(s"[${partId}] Local solve [lambda=${lambda}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+        subLambdaEyeInPlace(Ktrain, lambda)
 
         val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
         val trainLabels = partitionSeq.map(_._1)
@@ -287,7 +307,7 @@ object DCSolverYuchen extends Logging {
         val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
         val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
         val trainAccRate = 1.0 - trainErrorRate
-        
+
         println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
         //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
