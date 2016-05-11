@@ -271,7 +271,7 @@ object DCSolverYuchen extends Logging {
           gamma: Double,
           numPartitions: Int,
           permutationSeed: Long): DCSolverYuchenState = {
-
+    val trainingStartTime = System.nanoTime()
     val sc = train.labeledData.context
 
     val rng = new util.Random(permutationSeed)
@@ -351,6 +351,8 @@ object DCSolverYuchen extends Logging {
 
     }.cache()
     models.count()
+    val totalTrainTime = (System.nanoTime() - trainingStartTime)/1e9
+    println(s"TRAIN_TIME_${totalTrainTime}") 
     shuffledTrain.unpersist()
 
     DCSolverYuchenState(lambdas, gamma, models)
@@ -382,6 +384,8 @@ object DCSolver extends Logging {
           kmeansSampleSize: Double,
           kmeansSeed: Long): DCSolverState = {
 
+
+    val trainingStartTime = System.nanoTime()
     val kmeansStartTime = System.nanoTime()
     val kmeans = {
       val trainSubsample = train.data.sample(false, kmeansSampleSize, kmeansSeed)
@@ -389,7 +393,6 @@ object DCSolver extends Logging {
     }
     logInfo(s"KMeans took ${(System.nanoTime() - kmeansStartTime)/1e9} s")
 
-    val trainingStartTime = System.nanoTime()
     val models = kmeans(train.data)
       .map(oneHotToNumber)
       .zip(train.labeledData)
@@ -429,7 +432,8 @@ object DCSolver extends Logging {
           (partId, (Xtrain, results.map(_._1), trainLabels, results.map(_._2)))
         }.cache()
     models.count()
-    logInfo(s"Training took ${(System.nanoTime() - trainingStartTime)/1e9} s")
+    val totalTrainTime = (System.nanoTime() - trainingStartTime)/1e9
+    println(s"TRAIN_TIME_${totalTrainTime}") 
 
     val flattenedTrainLabels = models.map(_._2).map { case (_, _, labels, _) => labels }.flatMap(x => x)
     val trainEvals = (0 until lambdas.size).map { idx =>
