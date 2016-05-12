@@ -1,11 +1,12 @@
-package pipelines.images.cifar
+package pipelines.speech.timit
 
 import breeze.linalg._
 import breeze.numerics._
 
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
-import loaders.{CsvDataLoader, LabeledData}
+import loaders.{CsvDataLoader, LabeledData, TimitFeaturesDataLoader}
 import nodes.learning.{DCSolver, DCSolverYuchen}
+import nodes.util.ClassLabelIndicatorsFromIntLabels
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.SparkContext._
@@ -16,8 +17,8 @@ import workflow.Pipeline
 
 import org.apache.spark.rdd.RDD
 
-object CifarDCSolver extends Serializable with Logging {
-  val appName = "CifarDCSolver"
+object TimitDCSolver extends Serializable with Logging {
+  val appName = "TimitDCSolver"
 
   // http://stackoverflow.com/questions/1226555/case-class-to-map-in-scala
   private def ccAsMap(cc: AnyRef) =
@@ -32,46 +33,48 @@ object CifarDCSolver extends Serializable with Logging {
     rdd
   }
 
-  def run(sc: SparkContext, conf: CifarDCSolverConfig): Pipeline[DenseVector[Double], Int] = {
+  def run(sc: SparkContext, conf: TimitDCSolverConfig): Pipeline[DenseVector[Double], Int] = {
     println(ccAsMap(conf).toString)
 
-    // This is a property of the CIFAR Dataset
-    val numClasses = 10
+    // This is a property of the Timit Dataset
+    val numClasses = 147
 
     val startTime = System.nanoTime()
 
-    val train = LabeledData(
-      materialize(
-        sc.textFile(conf.trainLocation, conf.trainParts).map { row =>
-          val parts = row.split(',')
-          // ignore the image name
-          val labelFeats = parts.tail.map(_.toDouble)
-          (labelFeats(0).toInt, DenseVector(labelFeats.tail))
-        }.repartition(conf.trainParts).cache(),
-        "trainData"))
+    // Load the data
+    val timitFeaturesData = TimitFeaturesDataLoader(
+      sc,
+      conf.trainDataLocation,
+      conf.trainLabelsLocation,
+      conf.testDataLocation,
+      conf.testLabelsLocation,
+      conf.trainParts)
 
-    val testAll = materialize(sc.textFile(conf.testLocation, conf.testParts).map { row =>
-      val parts = row.split(',')
-      val labelFeats = parts.tail.map(_.toDouble)
-      // include the image name
-      (parts(0), labelFeats(0).toInt, DenseVector(labelFeats.tail))
-    }.repartition(conf.testParts).cache(), "testData")
+    val trainData = timitFeaturesData.train.data.cache().setName("trainRaw")
+    trainData.count()
+    val trainLabels = timitFeaturesData.train.labels.cache().setName("trainLabels")
+    val train = LabeledData(trainLabels.zip(trainData))
+   
+    val testData = timitFeaturesData.test.data.cache().setName("testRaw")
+    val numTest = testData.count()
+    val testLabels = timitFeaturesData.test.labels.cache().setName("testLabels")
+    val test = LabeledData(testLabels.zip(testData))
     
     if (conf.solver == "dcyuchen") {
       val dcsolver = DCSolverYuchen.fit(
         train, numClasses, conf.lambdas, conf.gamma, conf.numPartitions, conf.seed)
     
-      conf.lambdas.zip(dcsolver.augmentedMetrics(testAll,numClasses)).foreach { case (lambda, testEval) =>
+      conf.lambdas.zip(dcsolver.metrics(test, numClasses)).foreach { case (lambda, testEval) =>
         val testAcc = (100* testEval.totalAccuracy)
         println(s"LAMBDA_${lambda}_TEST_ACC_${testAcc}")
       }
       val endTime = System.nanoTime()
       println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
-    } else if (conf.solver == "dcsvm") {
+    } else if (conf.solver == "dcsvm"){
       val dcsolver = DCSolver.fit(
         train, numClasses, conf.lambdas, conf.gamma, conf.numModels, conf.kmeansSampleSize, conf.seed)
     
-      conf.lambdas.zip(dcsolver.trainEvals.zip(dcsolver.augmentedMetrics(testAll,numClasses))).foreach { case (lambda, (trainEval, testEval)) =>
+      conf.lambdas.zip(dcsolver.trainEvals.zip(dcsolver.metrics(test,numClasses))).foreach { case (lambda, (trainEval, testEval)) =>
         val trainAcc = (100 * trainEval.totalAccuracy)
         val testAcc = (100* testEval.totalAccuracy)
         println(s"LAMBDA_${lambda}_TRAIN_ACC_${trainAcc}_TEST_ACC_${testAcc}")
@@ -84,11 +87,12 @@ object CifarDCSolver extends Serializable with Logging {
     null
   }
 
-  case class CifarDCSolverConfig(
-      trainLocation: String = "",
-      testLocation: String = "",
+  case class TimitDCSolverConfig(
+      trainDataLocation: String = "",
+      trainLabelsLocation: String = "",
+      testDataLocation: String = "",
+      testLabelsLocation: String = "",
       trainParts: Int = 0,
-      testParts: Int = 0,
       numModels: Int = 10,
       numPartitions: Int = 128,
       kmeansSampleSize: Double = 0.1,
@@ -97,17 +101,18 @@ object CifarDCSolver extends Serializable with Logging {
       seed: Long = 0,
       solver: String = "")
 
-  def parse(args: Array[String]): CifarDCSolverConfig = new OptionParser[CifarDCSolverConfig](appName) {
+  def parse(args: Array[String]): TimitDCSolverConfig = new OptionParser[TimitDCSolverConfig](appName) {
 
     private def isPositive(s: String)(x: Int) =
       if (x > 0) success else failure(s + " must be positive")
 
     head(appName, "0.1")
     help("help") text("prints this usage text")
-    opt[String]("trainLocation") required() action { (x,c) => c.copy(trainLocation=x) }
-    opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
+    opt[String]("trainDataLocation") required() action { (x,c) => c.copy(trainDataLocation=x) }
+    opt[String]("trainLabelsLocation") required() action { (x,c) => c.copy(trainLabelsLocation=x) }
+    opt[String]("testDataLocation") required() action { (x,c) => c.copy(testDataLocation=x) }
+    opt[String]("testLabelsLocation") required() action { (x,c) => c.copy(testLabelsLocation=x) }
     opt[Int]("trainParts") required() action { (x,c) => c.copy(trainParts=x) } validate isPositive("trainParts")
-    opt[Int]("testParts") required() action { (x,c) => c.copy(testParts=x) } validate isPositive("testParts")
     opt[Int]("numModels") action { (x,c) => c.copy(numModels=x) } validate isPositive("numModels")
     opt[Int]("numPartitions") action { (x,c) => c.copy(numPartitions=x) } validate isPositive("numPartitions")
     opt[Double]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
@@ -115,7 +120,7 @@ object CifarDCSolver extends Serializable with Logging {
     opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
-  }.parse(args, CifarDCSolverConfig()).get
+  }.parse(args, TimitDCSolverConfig()).get
 
   /**
    * The actual driver receives its configuration parameters from spark-submit usually.

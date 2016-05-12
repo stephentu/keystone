@@ -94,7 +94,6 @@ case class DCSolverState(
     testEvaluation.count()
     val totalTestTime = (System.nanoTime() - testEvaluationStartTime)/1e9
     println(s"TEST_TIME_${totalTestTime}")
-    //logInfo(s"Test evaluation took ${(System.nanoTime() - testEvaluationStartTime)/1e9} s")
 
     val flattenedTestLabels = testEvaluation.map(_._2._1).flatMap(x => x)
     val flattenedImageIds = testEvaluation.map(_._2._3).flatMap(x => x)
@@ -102,7 +101,7 @@ case class DCSolverState(
       val flattenedTestPredictions = testEvaluation.map(_._2._2.apply(idx)).flatMap(x => x)
       AugmentedExamplesEvaluator(flattenedImageIds, flattenedTestPredictions, flattenedTestLabels, numClasses)
     }
-    logInfo("Done augmented example evaluation")
+    println("Done augmented example evaluation")
     result
   }
 
@@ -176,12 +175,6 @@ case class DCSolverYuchenState(
   def augmentedMetrics(
       test: RDD[(String, Int, DenseVector[Double])],
       numClasses: Int /* should not need to pass this around */): Seq[MulticlassMetrics] = {
-
-    //DEBUG: print number of elements in partition
-    val testNum = test.count
-    val testNumPerPartition = test.mapPartitions { iter => Iterator.single(iter.size) }.collect()
-    println("testNum: " + testNum)
-    println("test per partition: " + testNumPerPartition.mkString(","))
 
     val nModels = models.count()
     assert(nModels == models.partitions.size)
@@ -296,7 +289,7 @@ object DCSolverYuchen extends Logging {
 
       val localKernelStartTime = System.nanoTime()
       val Ktrain = GaussianKernel(gamma).apply(Xtrain)
-      logInfo(s"[${partId}] Local kernel gen took ${(System.nanoTime() - localKernelStartTime)/1e9} s")
+      println(s"PARTID_${partId}_KERNEL_GEN_TIME_${(System.nanoTime() - localKernelStartTime)/1e9}")
 
       if (lambdas.length == 1) {
         // Special case 1 lambda to be more memory efficient
@@ -322,7 +315,7 @@ object DCSolverYuchen extends Logging {
         else if (info < 0)
           throw new IllegalArgumentException()
 
-        logInfo(s"[${partId}] Local solve [lambda=${lambdas(0)}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+        println(s"PARTID_${partId}_LAMBDA_${lambdas(0)}_LOCAL_SOLVE_TIME_${(System.nanoTime() - localSolveStartTime)/1e9} s")
         val trainLabels = partitionSeq.map(_._1)
         Iterator.single((partId, (Xtrain, Seq(alphaStar))))
       } else {
@@ -330,7 +323,7 @@ object DCSolverYuchen extends Logging {
           val localSolveStartTime = System.nanoTime()
           addLambdaEyeInPlace(Ktrain, lambda)
           val alphaStar = Ktrain \ Ytrain
-          logInfo(s"[${partId}] Local solve [lambda=${lambda}] took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+          println(s"PARTID_${partId}_LAMBDA_${lambda}_LOCAL_SOLVE_TIME_${(System.nanoTime() - localSolveStartTime)/1e9} s")
           subLambdaEyeInPlace(Ktrain, lambda)
 
           val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
@@ -340,15 +333,12 @@ object DCSolverYuchen extends Logging {
           val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
           val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
           val trainAccRate = 1.0 - trainErrorRate
-
           println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
-          //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
           alphaStar
         }
         Iterator.single((partId, (Xtrain, alphaStars)))
       }
-
     }.cache()
     models.count()
     val totalTrainTime = (System.nanoTime() - trainingStartTime)/1e9
@@ -364,6 +354,24 @@ object DCSolverYuchen extends Logging {
  * L2 kernel RR is hard-coded for now
  */
 object DCSolver extends Logging {
+
+  private def addLambdaEyeInPlace(in: DenseMatrix[Double], lambda: Double): Unit = {
+    assert(in.rows == in.cols)
+    var i = 0
+    while (i < in.rows) {
+      in(i, i) += lambda
+      i += 1
+    }
+  }
+  
+  private def subLambdaEyeInPlace(in: DenseMatrix[Double], lambda: Double): Unit = {
+    assert(in.rows == in.cols)
+    var i = 0
+    while (i < in.rows) {
+      in(i, i) -= lambda
+      i += 1
+    }
+  }
 
   // necessary since kmeans returns one-hot encoded vectors
   def oneHotToNumber(x: DenseVector[Double]): Int = {
@@ -391,57 +399,87 @@ object DCSolver extends Logging {
       val trainSubsample = train.data.sample(false, kmeansSampleSize, kmeansSeed)
       KMeansPlusPlusEstimator(numPartitions, 100).fit(trainSubsample)
     }
-    logInfo(s"KMeans took ${(System.nanoTime() - kmeansStartTime)/1e9} s")
+    println(s"KMEANS_TIME_${(System.nanoTime() - kmeansStartTime)/1e9} s")
 
-    val models = kmeans(train.data)
+    val models: RDD[(Int, (DenseMatrix[Double], Seq[DenseMatrix[Double]]), Seq[Int], Seq[Seq[Int]])]  = kmeans(train.data)
       .map(oneHotToNumber)
       .zip(train.labeledData)
       .groupByKey(numPartitions)
       .map { case (partId, partition) =>
-          val elems = partition.toSeq
-          val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
-          val Xtrain = MatrixUtils.rowsToMatrix(elems.map(_._2))
-          val Ytrain = MatrixUtils.rowsToMatrix(elems.map(_._1).map(classLabeler.apply))
+        val elems = partition.toSeq
+        val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
+        val Xtrain: DenseMatrix[Double] = MatrixUtils.rowsToMatrix(elems.map(_._2))
+        val Ytrain = MatrixUtils.rowsToMatrix(elems.map(_._1).map(classLabeler.apply))
 
-          val localKernelStartTime = System.nanoTime()
-          val Ktrain = GaussianKernel(gamma).apply(Xtrain)
-          logInfo(s"[${partId}] Local kernel gen took ${(System.nanoTime() - localKernelStartTime)/1e9} s")
+        val localKernelStartTime = System.nanoTime()
+        val Ktrain = GaussianKernel(gamma).apply(Xtrain)
+        println(s"PARTID_${partId}_KERNEL_GEN_TIME_${(System.nanoTime() - localKernelStartTime)/1e9} s")
 
-          val trainLabels = elems.map(_._1)
+        val trainLabels: Seq[Int] = elems.map(_._1)
 
-          val results = lambdas.map { lambda =>
+        if (lambdas.length == 1) {
+          // Special case 1 lambda to be more memory efficient
+          val localSolveStartTime = System.nanoTime()
+          addLambdaEyeInPlace(Ktrain, lambdas(0))
+          // val alphaStar = Ktrain \ Ytrain
+          // square: LUSolve
+          val alphaStar = DenseMatrix.zeros[Double](Ytrain.rows, Ytrain.cols)
+          // we initialize alphaStar to Ytrain ??
+          alphaStar := Ytrain
+          val piv = new Array[Int](Ktrain.rows)
+          // NOTE: we don't copy Ktrain, so it gets overwritten
+          assert(!Ktrain.isTranspose)
+          val info: Int = {
+            val info = new intW(0)
+            lapack.dgesv(Ktrain.rows, alphaStar.cols, Ktrain.data, Ktrain.offset, Ktrain.majorStride, piv, 0,
+                         alphaStar.data, alphaStar.offset, alphaStar.majorStride, info)
+            info.`val`
+          }
+         
+          if (info > 0)
+            throw new MatrixSingularException()
+          else if (info < 0)
+            throw new IllegalArgumentException()
 
+          val predictions: Seq[Int] = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+          assert(predictions.size == trainLabels.size)
+          println(s"PARTID_${partId}_LAMBDA_${lambdas(0)}_LOCAL_SOLVE_TIME_${(System.nanoTime() - localSolveStartTime)/1e9} s")
+          (partId, (Xtrain, Seq(alphaStar)), trainLabels, Seq(predictions))
+        } else {
+          val ap = lambdas.map { lambda =>
             val localSolveStartTime = System.nanoTime()
-            val alphaStar = (Ktrain + (DenseMatrix.eye[Double](Ktrain.rows) :* lambda)) \ Ytrain
-            logInfo(s"[${partId}] Local solve took ${(System.nanoTime() - localSolveStartTime)/1e9} s")
+            addLambdaEyeInPlace(Ktrain, lambda)
+            val alphaStar = Ktrain \ Ytrain
+            println(s"PARTID_${partId}_LAMBDA_${lambda}_LOCAL_SOLVE_TIME_${(System.nanoTime() - localSolveStartTime)/1e9} s")
+            subLambdaEyeInPlace(Ktrain, lambda)
 
-            // evaluate training error-- we can do this now for DC-SVM since
-            // the model used for prediction is the one associated with the center
-            val predictions = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
+            val predictions: Seq[Int] = MatrixUtils.matrixToRowArray(Ktrain * alphaStar).map(MaxClassifier.apply).toSeq
             assert(predictions.size == trainLabels.size)
 
             val nErrors = predictions.zip(trainLabels).filter { case (x, y) => x != y }.size
             val trainErrorRate = (nErrors.toDouble / Xtrain.rows.toDouble)
             val trainAccRate = 1.0 - trainErrorRate
             println(s"PARTID_${partId}_LAMBDA_${lambda}_TRAIN_ACC_${trainAccRate}")
-            //logInfo(s"[${partId}] localTrainEval lambda: ${lambda}, acc: ${trainAccRate}, err: ${trainErrorRate}, nErrors: ${nErrors}, nLocal: ${Xtrain.rows}")
 
             (alphaStar, predictions)
           }
-
-          (partId, (Xtrain, results.map(_._1), trainLabels, results.map(_._2)))
-        }.cache()
+          val alphaStars = ap.map(_._1)
+          val predictionArray: Seq[Seq[Int]] = ap.map(_._2)
+          (partId, (Xtrain, alphaStars), trainLabels, predictionArray)
+        }
+      }.cache()
     models.count()
     val totalTrainTime = (System.nanoTime() - trainingStartTime)/1e9
     println(s"TRAIN_TIME_${totalTrainTime}") 
 
-    val flattenedTrainLabels = models.map(_._2).map { case (_, _, labels, _) => labels }.flatMap(x => x)
+    val flattenedTrainLabels = models.map(_._3).flatMap(x => x)
     val trainEvals = (0 until lambdas.size).map { idx =>
-      val flattenedTrainPredictions = models.map(_._2).flatMap { case (_, _, _, r) => r(idx) }
+      val flattenedTrainPredictions = models.map(_._4).flatMap(x => x(idx))
       MulticlassClassifierEvaluator(flattenedTrainPredictions, flattenedTrainLabels, numClasses)
     }
 
-    DCSolverState(lambdas, gamma, kmeans, models.mapValues { case (x, as, _, _) => (x, as) }, trainEvals)
+    //DCSolverState(lambdas, gamma, kmeans, models.mapValues { case (x, as, _, _) => (x, as) }, trainEvals)
+    DCSolverState(lambdas, gamma, kmeans, models.map {case(partID, xas , _, _) => (partID, xas)}, trainEvals)
   }
 
 }
