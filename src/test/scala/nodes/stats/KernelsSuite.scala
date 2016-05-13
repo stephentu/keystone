@@ -32,4 +32,14 @@ class KernelsSuite extends FunSuite {
     // assert(diff.max < 1e-6)
   }
 
+  test("Uniform partitioner works correctly") {
+    val numElems = 10
+    val numParts = 3
+    val part = new UniformRangePartitioner(numElems, numParts)
+
+    (0 until numElems).foreach { e =>
+      println("Got partition " + part.getPartition(e) + " for " + e)
+    }
+  }
+
 }

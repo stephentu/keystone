@@ -5,6 +5,8 @@ import breeze.numerics._
 import workflow.Transformer
 import utils.MatrixUtils
 
+import org.apache.spark.Partitioner
+
 case class GaussianKernel(gamma: Double) {
 
   private def expScalaMulInPlace(pdist2: DenseMatrix[Double], gamma: Double) = {
@@ -34,3 +36,21 @@ case class GaussianKernel(gamma: Double) {
     pdist2
   }
 }
+
+
+// Uniformly partitions keys from 0 to n-1 into p partition
+// TODO: Only works for Int keys right now
+class UniformRangePartitioner(numElems: Int, numParts: Int) extends Partitioner {
+
+  val elemsPerPart = math.ceil(numElems.toDouble/numParts).toInt
+
+  def numPartitions: Int = numParts
+
+  def getPartition(key: Any): Int = {
+    val k = key.asInstanceOf[Int]
+    k / elemsPerPart
+    // (k.toDouble / numParts).toInt
+  }
+
+}
+
