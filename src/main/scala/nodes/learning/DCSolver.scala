@@ -12,6 +12,7 @@ import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import evaluation.{AugmentedExamplesEvaluator, MulticlassClassifierEvaluator, MulticlassMetrics}
 import loaders.LabeledData
 import nodes.stats.GaussianKernel
+import nodes.stats.UniformRangePartitioner
 import nodes.util._
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.SparkContext._
@@ -22,7 +23,7 @@ import workflow.Pipeline
 import edu.berkeley.cs.amplab.mlmatrix.util.{Utils => MLMatrixUtils}
 
 import org.apache.spark.rdd.RDD
-
+import org.apache.spark.rdd.ShuffledRDD
 
 /**
  * TODO: this is very un-keystoneish for now
@@ -240,6 +241,22 @@ case class DCSolverYuchenState(
 
 object DCSolverYuchen extends Logging {
 
+  def isSorted[T](s: Seq[T])(implicit cmp: Ordering[T]): Boolean = {
+    if (s.isEmpty) {
+      true 
+    } else {
+      var i = 1
+      while (i < s.size) {
+        if (cmp.gt(s(i - 1), s(i)))
+          return false
+        i += 1
+      }
+      true
+    }
+  }
+
+
+
   private def addLambdaEyeInPlace(in: DenseMatrix[Double], lambda: Double): Unit = {
     assert(in.rows == in.cols)
     var i = 0
@@ -268,18 +285,29 @@ object DCSolverYuchen extends Logging {
     val sc = train.labeledData.context
 
     val rng = new util.Random(permutationSeed)
-    val pi: Array[Int] = rng.shuffle((0 until train.labeledData.count().toInt).toIndexedSeq).toArray
+    val numExamples = train.labeledData.count().toInt
+    val pi: Array[Int] = rng.shuffle((0 until numExamples).toIndexedSeq).toArray
     val piBC = sc.broadcast(pi)
 
-    val shuffledTrain = train.labeledData
+    val shuffledTrainRnd = train.labeledData
       .zipWithIndex
       .map { case (elem, idx) => (piBC.value.apply(idx.toInt), elem) }
-      .sortByKey(true, numPartitions)
+
+    val part = new UniformRangePartitioner(numExamples, numPartitions)
+    val ordering = Ordering[Int]
+    val shuffledTrainSorted = new ShuffledRDD[Int, (Int, DenseVector[Double]), (Int, DenseVector[Double])](
+			shuffledTrainRnd, part).setKeyOrdering(ordering)
+    val keysInOrder = shuffledTrainSorted.mapPartitions { iter => Iterator.single(isSorted(iter.map(_._1).toSeq)) }.collect() 
+		println("TIMIT DCSolverYuchen, keysInOrder " + keysInOrder.forall(x => x))
+    val shuffledTrain: RDD[(Int, DenseVector[Double])] = shuffledTrainSorted
       .map(_._2)
       .cache()
-    shuffledTrain.count()
 
-    piBC.destroy()
+    val shuffledPartCounts = shuffledTrain.mapPartitions(iter => Iterator.single(iter.size)).collect().mkString(",")
+    println("TIMIT DCSolverYuchen, counts per part = " + shuffledPartCounts)
+
+    piBC.unpersist()
+    // piBC.destroy()
 
     val models = shuffledTrain.mapPartitionsWithIndex { case (partId, partition) =>
       val partitionSeq = partition.toSeq
