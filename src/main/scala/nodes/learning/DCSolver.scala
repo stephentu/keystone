@@ -423,14 +423,32 @@ object DCSolver extends Logging {
 
     val trainingStartTime = System.nanoTime()
     val kmeansStartTime = System.nanoTime()
-    val kmeans = {
-      val trainSubsample = train.data.sample(false, kmeansSampleSize, kmeansSeed)
-      KMeansPlusPlusEstimator(numPartitions, 100).fit(trainSubsample)
+
+    var kMeansDone = false
+    var kMeansWithCenters: RDD[Int] = null 
+    var kMeansAttempts = 0
+    var kmeans: KMeansModel = null
+
+    while (!kMeansDone && kMeansAttempts < 10) {
+      kmeans = {
+        val trainSubsample = train.data.sample(false, kmeansSampleSize, kmeansSeed+kMeansAttempts)
+        KMeansPlusPlusEstimator(numPartitions, 100, seed=kMeansAttempts).fit(trainSubsample)
+      }
+
+      kMeansWithCenters = kmeans(train.data).map(oneHotToNumber)
+      val numExamplesInEachCenter = kMeansWithCenters.countByValue()
+      println("numExamples in each Center " +  numExamplesInEachCenter.toSeq.sortBy(_._2).mkString(","))
+      val maxInCluster = numExamplesInEachCenter.toSeq.sortBy(_._2).takeRight(1).head._2 
+      if (maxInCluster < math.sqrt(Integer.MAX_VALUE)) {
+        kMeansDone = true
+      } else {
+        println("Retrying KMeans " + kMeansAttempts + " because maxInCluster was " + maxInCluster)
+      }
+      kMeansAttempts += 1
     }
     println(s"KMEANS_TIME_${(System.nanoTime() - kmeansStartTime)/1e9} s")
 
-    val models: RDD[(Int, (DenseMatrix[Double], Seq[DenseMatrix[Double]]), Seq[Int], Seq[Seq[Int]])]  = kmeans(train.data)
-      .map(oneHotToNumber)
+    val models: RDD[(Int, (DenseMatrix[Double], Seq[DenseMatrix[Double]]), Seq[Int], Seq[Seq[Int]])]  = kMeansWithCenters
       .zip(train.labeledData)
       .groupByKey(numPartitions)
       .map { case (partId, partition) =>

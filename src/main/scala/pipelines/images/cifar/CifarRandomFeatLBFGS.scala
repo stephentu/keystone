@@ -23,6 +23,19 @@ import org.apache.spark.rdd.RDD
 object CifarRandomFeatLBFGS extends Serializable with Logging {
   val appName = "CifarRandomFeatLBFGS"
 
+
+  def testCb(testImageIds: RDD[String],
+             testFeats: RDD[DenseVector[Double]],
+             testActuals: RDD[Int],
+             numClasses: Int,
+             lm: LinearMapper[DenseVector[Double]]): Double = {
+    val testPredictions = lm(testFeats)
+    val testEval = AugmentedExamplesEvaluator(
+        testImageIds, testPredictions, testActuals, numClasses)
+    val testAcc = (100* testEval.totalAccuracy)
+    testAcc
+  }
+
   // http://stackoverflow.com/questions/1226555/case-class-to-map-in-scala
   private def ccAsMap(cc: AnyRef) =
     (Map[String, Any]() /: cc.getClass.getDeclaredFields) {(a, f) =>
@@ -35,6 +48,49 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     rdd.count()
     rdd
   }
+
+  var WMat: DenseMatrix[Double] = null
+  var BMat: DenseVector[Double] = null
+
+  def getWandB(seed: Long, numInputFeatures: Int, numOutputFeatures: Int, gamma: Double) = synchronized {
+    if (WMat == null || BMat == null) {
+      val random = new java.util.Random(seed)
+      val randomSource = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(random.nextLong())))
+      val wDist = randomSource.gaussian
+      val bDist = randomSource.uniform
+      WMat = DenseMatrix.rand(numOutputFeatures, numInputFeatures, wDist)
+      WMat :*= gamma
+      BMat = DenseVector.rand(numOutputFeatures, bDist)
+      BMat :*= ((2*math.Pi))
+    }
+    (WMat, BMat)
+  }
+
+  def randomCosineFeaturize(
+      data: RDD[DenseVector[Double]],
+      seed: Long,
+      numInputFeatures: Int,
+      numOutputFeatures: Int,
+      gamma: Double): RDD[DenseMatrix[Double]] = {
+    val featuresOut = data.mapPartitions { part =>
+      if (part.hasNext) {
+        val dataPart = MatrixUtils.rowsToMatrix(part)
+        val (w, b) = getWandB(seed, numInputFeatures, numOutputFeatures, gamma)
+        println(s"GOT dataPart dims ${dataPart.rows} x ${dataPart.cols}")
+        println(s"GOT w dims ${w.rows} x ${w.cols}")
+        val features = dataPart * w.t
+        features(*, ::) :+= b
+        cos.inPlace(features)
+        Iterator.single(features)
+      } else {
+        Iterator.empty
+      }
+      //MatrixUtils.matrixToRowArray(features).iterator
+    }
+    featuresOut.cache()
+    featuresOut
+  }
+
 
   def run(sc: SparkContext, conf: CifarRandomFeatLBFGSConfig): Pipeline[DenseVector[Double], Int] = {
     println(ccAsMap(conf).toString)
@@ -67,27 +123,40 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
 
     val numBlocks = math.ceil(conf.numCosineFeatures.toDouble / conf.blockSize.toDouble).toInt
 
-    val featurizer = CosineRandomFeatures(
-      numInputFeats,
-      conf.numCosineFeatures,
-      conf.cosineGamma,
-      randomSource.gaussian,
-      randomSource.uniform)
+    // val featurizer = CosineRandomFeatures(
+    //   numInputFeats,
+    //   conf.numCosineFeatures,
+    //   conf.cosineGamma,
+    //   randomSource.gaussian,
+    //   randomSource.uniform)
 
-    val trainFeats = featurizer(train.data).cache()
+    val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     trainFeats.count
 
-    val trainLabels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
+    val testFeats = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma).mapPartitions { itr =>
+      if (itr.hasNext) {
+        MatrixUtils.matrixToRowArray(itr.next).iterator
+      } else {
+        Iterator.empty
+      }
+    }
+    testFeats.count
+
+    val trainLabels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels).mapPartitions { iter =>
+      MatrixUtils.rowsToMatrixIter(iter)
+    }
 
     val featTime = System.nanoTime()
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
     if (conf.solver == "lbfgs") {
-      val model = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=20, regParam=conf.lambda).fit(trainFeats, trainLabels)
-      val testPredictions = model(testAll.map(_._3))
-      val testEval = AugmentedExamplesEvaluator(
-          testAll.map(_._1), testPredictions, testAll.map(_._2), numClasses)
-      val testAcc = (100* testEval.totalAccuracy)
+
+      val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
+
+      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda, epochCallback=Some(testCbBound), epochEveryTest=10).fitBatch(trainFeats, trainLabels)
+
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
 
       val endTime = System.nanoTime()
@@ -140,6 +209,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val appConfig = parse(args)
     val conf = new SparkConf().setAppName(appName)
     conf.setIfMissing("spark.master", "local[24]")
+    conf.remove("spark.jars")
     val sc = new SparkContext(conf)
     run(sc, appConfig)
     sc.stop()

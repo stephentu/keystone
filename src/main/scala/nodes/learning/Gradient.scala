@@ -123,6 +123,8 @@ trait BatchGradient extends Serializable {
   
   def compute(
       data: DenseMatrix[Double],
+      dataColMeans: DenseVector[Double],
+      dataColStdevs: Option[DenseVector[Double]],
       labels: DenseMatrix[Double],
       weights: DenseMatrix[Double])
     : (DenseMatrix[Double], Double)
@@ -132,27 +134,26 @@ class LeastSquaresBatchGradient extends BatchGradient {
   
   def compute(
       data: DenseMatrix[Double],
+      dataColMeans: DenseVector[Double],
+      dataColStdevs: Option[DenseVector[Double]],
       labels: DenseMatrix[Double],
       weights: DenseMatrix[Double])
     : (DenseMatrix[Double], Double) = {
 
-    if (labels.cols != 2) {
-      // Least Squares Gradient is At.(Ax - b)
-      val axb = data * weights - labels
-      val grad = data.t * (axb)
-      // Loss is 0.5 * norm(Ax - b)
-      val loss = 0.5 * math.pow(norm(axb.toDenseVector), 2)
-
-      (grad, loss)
-    } else {
-      val axb = data * weights(::, 0) - labels(::, 0)
-      val grad = data.t * axb
-      val loss = math.pow(norm(axb.toDenseVector), 2)
-      val gradMat = new DenseMatrix[Double](grad.length, 2)
-      gradMat(::, 0) := grad
-      gradMat(::, 1) := ((grad :* -1.0))
-      (gradMat, loss)
+    // Least Squares Gradient is At.(Ax - b)
+    val axb = (data * weights)
+    val meanTerm = (dataColMeans.t * weights).t
+    axb(*, ::) -= meanTerm
+    dataColStdevs.foreach { x =>
+      axb(*, ::) :/= x
     }
+    axb -= labels
+
+    val grad = data.t * (axb)
+    // Loss is 0.5 * norm(Ax - b)
+    val loss = 0.5 * math.pow(norm(axb.toDenseVector), 2)
+
+    (grad, loss)
   }
 
 }

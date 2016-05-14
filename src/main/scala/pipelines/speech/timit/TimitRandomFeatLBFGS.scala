@@ -6,7 +6,7 @@ import breeze.numerics._
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import nodes.learning._
 import nodes.stats.CosineRandomFeatures
-import nodes.util.{Cacher, ClassLabelIndicatorsFromIntLabels}
+import nodes.util.{Cacher, ClassLabelIndicatorsFromIntLabels, VectorCombiner}
 import nodes.util.MaxClassifier
 import loaders.{CsvDataLoader, LabeledData, TimitFeaturesDataLoader}
 
@@ -24,6 +24,18 @@ import org.apache.spark.rdd.RDD
 object TimitRandomFeatLBFGS extends Serializable with Logging {
   val appName = "TimitRandomFeatLBFGS"
 
+  def testCb(testFeats: RDD[DenseVector[Double]],
+             testActuals: RDD[Int],
+             numClasses: Int,
+             lm: LinearMapper[DenseVector[Double]]): Double = {
+
+    val testPredictions = (lm andThen MaxClassifier).apply(testFeats)
+    val testEval = MulticlassClassifierEvaluator(
+        testPredictions, testActuals, numClasses)
+    val testAcc = (100* testEval.totalAccuracy)
+    testAcc
+  }
+
   // http://stackoverflow.com/questions/1226555/case-class-to-map-in-scala
   private def ccAsMap(cc: AnyRef) =
     (Map[String, Any]() /: cc.getClass.getDeclaredFields) {(a, f) =>
@@ -35,6 +47,31 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     rdd.setName(s)
     rdd.count()
     rdd
+  }
+
+  def randomCosineFeaturize(
+      data: RDD[DenseVector[Double]],
+      seed: Long,
+      numInputFeatures: Int,
+      numOutputFeatures: Int,
+      gamma: Double): RDD[DenseMatrix[Double]] = {
+    val featuresOut = data.mapPartitions { part =>
+      val random = new java.util.Random(seed)
+      val randomSource = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(random.nextLong())))
+      val wDist = randomSource.gaussian
+      val bDist = randomSource.uniform
+      val W = DenseMatrix.rand(numOutputFeatures, numInputFeatures, wDist) :* gamma
+      val b = DenseVector.rand(numOutputFeatures, bDist) :* ((2*math.Pi))
+
+      val dataPart = MatrixUtils.rowsToMatrix(part)
+      val features = dataPart * W.t
+      features(*, ::) :+= b
+      cos.inPlace(features)
+      Iterator.single(features)
+      // MatrixUtils.matrixToRowArray(features).iterator
+    }
+    featuresOut.cache()
+    featuresOut
   }
 
   def run(sc: SparkContext, conf: TimitRandomFeatLBFGSConfig): Pipeline[DenseVector[Double], Int] = {
@@ -69,29 +106,31 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     val numInputFeats = train.data.first.size
     val numBlocks = math.ceil(conf.numCosineFeatures.toDouble / conf.blockSize.toDouble).toInt
 
-    val featurizer = CosineRandomFeatures(
-      numInputFeats,
-      conf.numCosineFeatures,
-      conf.cosineGamma,
-      randomSource.gaussian,
-      randomSource.uniform)
+		val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
 
-    val trainFeats = featurizer(train.data).cache()
+    // val trainFeats = featurizer(train.data).cache()
     trainFeats.count
 
-    val trainLabelsVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
+    //val testFeats = featurizer(test.data).cache()
+		val testFeats = randomCosineFeaturize(test.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma).mapPartitions { itr =>
+      MatrixUtils.matrixToRowArray(itr.next).iterator
+    }
+    testFeats.count
+
+    val trainLabelsVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels).mapPartitions { iter =>
+      MatrixUtils.rowsToMatrixIter(iter)
+    }
 
     val featTime = System.nanoTime()
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
     if (conf.solver == "lbfgs") {
-      val model = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=20, regParam=conf.lambda).fit(trainFeats, trainLabelsVec)
-      val testPredictions = (model andThen MaxClassifier).apply(testData)
-      val testEval = MulticlassClassifierEvaluator(
-          testPredictions, testLabels, numClasses)
-      val testAcc = (100* testEval.totalAccuracy)
-      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+      val testCbBound = testCb(testFeats, testLabels, numClasses, _: LinearMapper[DenseVector[Double]])
+      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda,epochCallback=Some(testCbBound), epochEveryTest=5).fitBatch(trainFeats, trainLabelsVec)
 
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
       val endTime = System.nanoTime()
       println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
     } else {
@@ -144,6 +183,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     val appConfig = parse(args)
     val conf = new SparkConf().setAppName(appName)
     conf.setIfMissing("spark.master", "local[24]")
+    conf.remove("spark.jars")
     val sc = new SparkContext(conf)
     run(sc, appConfig)
     sc.stop()
