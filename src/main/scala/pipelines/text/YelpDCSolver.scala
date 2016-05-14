@@ -136,23 +136,29 @@ object YelpDCSolver extends Serializable with Logging {
 
     val trainStr = sc.textFile(conf.trainDataLocation, conf.trainParts).map { row =>
       row.split(' ')
-    }
+    }.cache()
+    trainStr.count
     // labels encoded in {1, 2, 3, 4, 5}
-    val trainLab = sc.textFile(conf.trainLabelsLocation, conf.trainParts).map { row =>
+    val trainLab = scala.io.Source.fromFile(conf.trainLabelsLocation).getLines().map { row =>
       row.toInt - 1
-    }
+    }.toArray
+    val trainStrLocalLab = trainStr.zipWithIndex.map(x => (x._1, trainLab(x._2.toInt)) )
+
     val trainStrLab = materialize(
-        trainStr.zip(trainLab).repartition(conf.trainParts), "trainData")
+        trainStrLocalLab.repartition(conf.trainParts), "trainData")
 
     val testStr = sc.textFile(conf.testDataLocation, conf.testParts).map { row =>
       row.split(' ')
-    }
+    }.cache()
+    testStr.count
     // labels encoded in {1, 2, 3, 4, 5}
-    val testLab = sc.textFile(conf.testLabelsLocation, conf.testParts).map { row =>
+    val testLab = scala.io.Source.fromFile(conf.testLabelsLocation).getLines().map { row =>
       row.toInt - 1
-    }
+    }.toArray
+    val testStrLocalLab = testStr.zipWithIndex.map(x => (x._1, testLab(x._2.toInt)) )
     val testStrLab = materialize(
-        testStr.zip(testLab).repartition(conf.testParts), "testData")
+        testStrLocalLab, "testData")
+//        testStrLocalLab.repartition(conf.testParts), "testData")
 
     val (trainFeat, testFeat) = featurizeReviews(trainStrLab.map(_._1), testStrLab.map(_._1), numNgrams) 
   
@@ -161,7 +167,7 @@ object YelpDCSolver extends Serializable with Logging {
 
     if (conf.solver == "dcyuchen") {
       val dcsolver = DCSolverYuchenSparse.fit(
-        trainLabFeat, numClasses, conf.lambdas, conf.gamma, conf.numPartitions, conf.seed)
+        trainLabFeat, numClasses, conf.lambdas, conf.numPartitions, conf.seed)
     
       conf.lambdas.zip(dcsolver.metrics(testLabFeat, numClasses)).foreach { case (lambda, testEval) =>
         val testAcc = (100* testEval.totalAccuracy)
@@ -186,7 +192,6 @@ object YelpDCSolver extends Serializable with Logging {
       numPartitions: Int = 128,
       kmeansSampleSize: Double = 0.1,
       lambdas: Seq[Double] = Seq.empty,
-      gamma: Double = 0,
       seed: Long = 0,
       solver: String = "")
 
@@ -207,7 +212,6 @@ object YelpDCSolver extends Serializable with Logging {
     opt[Int]("numPartitions") action { (x,c) => c.copy(numPartitions=x) } validate isPositive("numPartitions")
     opt[Double]("kmeansSampleSize") action { (x,c) => c.copy(kmeansSampleSize=x) }
     opt[Seq[Double]]("lambdas") required() action { (x,c) => c.copy(lambdas=x) }
-    opt[Double]("gamma") required() action { (x,c) => c.copy(gamma=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, YelpDCSolverConfig()).get
@@ -221,6 +225,7 @@ object YelpDCSolver extends Serializable with Logging {
     val appConfig = parse(args)
     val conf = new SparkConf().setAppName(appName)
     conf.setIfMissing("spark.master", "local[24]")
+    conf.remove("spark.jars")
     val sc = new SparkContext(conf)
     run(sc, appConfig)
     sc.stop()

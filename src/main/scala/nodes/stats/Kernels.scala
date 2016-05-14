@@ -51,7 +51,7 @@ case class SparseLinearKernel {
     var s = 0.0
     var lhsIdx = 0
     var rhsIdx = 0
-    while (lhsIdx < lhsInds.size && rhsIdx < rhsInds.size) {
+    while (lhsIdx < lhsInds.length && rhsIdx < rhsInds.length) {
       if (lhsInds(lhsIdx) == rhsInds(rhsIdx)) {
         s += lhsValues(lhsIdx) * rhsValues(rhsIdx)
         lhsIdx += 1
@@ -66,27 +66,35 @@ case class SparseLinearKernel {
   }
 
 	def apply(
-			lhs: Seq[(Array[Long], Array[Double])],
-			rhs: Seq[(Array[Long], Array[Double])]): DenseMatrix[Double] = {
-		val lhsInput = lhs.size
-		val rhsInput = rhs.size
+			lhs: Array[(Array[Long], Array[Double])],
+			rhs: Array[(Array[Long], Array[Double])]): DenseMatrix[Double] = {
+		val lhsInput = lhs.length
+		val rhsInput = rhs.length
 		val out = DenseMatrix.zeros[Double](lhsInput, rhsInput)
-		(0 until lhsInput).foreach { lhsIdx =>
-			(0 until rhsInput).foreach { rhsIdx =>
-        out(lhsIdx, rhsIdx) = sparseDotProduct(lhs(lhsIdx), rhs(rhsIdx))
-			}
-		}
+    var i = 0
+    while (i < lhsInput) {
+      var j = 0
+      while (j < rhsInput) {
+        out(i, j) = sparseDotProduct(lhs(i), rhs(j))
+        j = j + 1
+      }
+      i = i + 1
+    }
 		out
 	}
 
   def apply(in: Seq[(Array[Long], Array[Double])]): DenseMatrix[Double] = {
 		val numInput = in.length
 		val out = DenseMatrix.zeros[Double](numInput, numInput)
-		(0 until numInput).foreach { lhs =>
-			(0 until numInput).foreach { rhs =>
-				out(lhs, rhs) = sparseDotProduct(in(lhs), in(rhs))
-			}
-		}
+    var i = 0
+    while (i < numInput) {
+      var j = 0
+      while (j < numInput) {
+				out(i, j) = sparseDotProduct(in(i), in(j))
+        j = j + 1
+      }
+      i = i + 1
+    }
 		out
 	}
 

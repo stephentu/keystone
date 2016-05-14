@@ -27,8 +27,7 @@ import org.apache.spark.rdd.ShuffledRDD
 
 case class DCSolverYuchenSparseState(
   lambdas: Seq[Double],
-  gamma: Double,
-  models: RDD[(Int, (Seq[(Array[Long], Array[Double])], Seq[DenseMatrix[Double]]))] /* it is assumed each entry in the RDD belongs to a partition */
+  models: RDD[(Int, (Array[(Array[Long], Array[Double])], Seq[DenseMatrix[Double]]))] /* it is assumed each entry in the RDD belongs to a partition */
 ) extends Logging {
 
   def metrics(test: RDD[(Int, (Array[Long], Array[Double]))],
@@ -38,9 +37,13 @@ case class DCSolverYuchenSparseState(
     assert(nModels == models.partitions.size)
 
     var testAccums = test.mapPartitions { partition =>
-      val sz = partition.size
-      assert(sz > 0)
-      Iterator.single(lambdas.map { _ => DenseMatrix.zeros[Double](sz, numClasses) })
+      if (partition.hasNext) {
+        val sz = partition.size
+        assert(sz > 0)
+        Iterator.single(lambdas.map { _ => DenseMatrix.zeros[Double](sz, numClasses) })
+      } else {
+        Iterator.empty
+      }
     }.cache()
     testAccums.count()
 
@@ -50,20 +53,24 @@ case class DCSolverYuchenSparseState(
       val modelBC = test.context.broadcast(model)
 
       val newTestAccums = testAccums.zipPartitions(test) { case (accumsIter, partition) =>
-        val accums = accumsIter.next()
-        val partitionSeq = partition.toSeq
+        if (accumsIter.hasNext) {
+          val accums = accumsIter.next()
+          val partitionSeq = partition.toArray
 
-        val Xtest = partitionSeq.map(_._2) // Seq[(Array[Long], Array[Double])]
-        val Ytest = partitionSeq.map(_._1) // Seq[Int]
+          val Xtest = partitionSeq.map(_._2) // Seq[(Array[Long], Array[Double])]
+          val Ytest = partitionSeq.map(_._1) // Seq[Int]
 
-        val (xTrainPart, alphaStarsPart) = modelBC.value
-        val KtesttrainPart = new SparseLinearKernel().apply(Xtest, xTrainPart)
+          val (xTrainPart, alphaStarsPart) = modelBC.value
+          val KtesttrainPart = new SparseLinearKernel().apply(Xtest, xTrainPart)
 
-        accums.zip(alphaStarsPart).foreach { case (accum, alphaStarPart) =>
-          accum += KtesttrainPart * alphaStarPart
+          accums.zip(alphaStarsPart).foreach { case (accum, alphaStarPart) =>
+            accum += KtesttrainPart * alphaStarPart
+          }
+
+          Iterator.single(accums)
+        } else {
+          Iterator.empty
         }
-
-        Iterator.single(accums)
       }.cache()
       newTestAccums.count()
       testAccums.unpersist()
@@ -125,7 +132,6 @@ object DCSolverYuchenSparse extends Logging {
   def fit(train: RDD[(Int, (Array[Long], Array[Double]))],
           numClasses: Int,
           lambdas: Seq[Double],
-          gamma: Double,
           numPartitions: Int,
           permutationSeed: Long): DCSolverYuchenSparseState = {
     val trainingStartTime = System.nanoTime()
@@ -157,7 +163,7 @@ object DCSolverYuchenSparse extends Logging {
     // piBC.destroy()
 
     val models = shuffledTrain.mapPartitionsWithIndex { case (partId, partition) =>
-      val partitionSeq = partition.toSeq
+      val partitionSeq = partition.toArray
       val classLabeler = ClassLabelIndicatorsFromIntLabels(numClasses)
       val Xtrain = partitionSeq.map(_._2) //MatrixUtils.rowsToMatrix(partitionSeq.map(_._2))
       val Ytrain = MatrixUtils.rowsToMatrix(partitionSeq.map(_._1).map(classLabeler.apply))
@@ -220,7 +226,7 @@ object DCSolverYuchenSparse extends Logging {
     println(s"TRAIN_TIME_${totalTrainTime}") 
     shuffledTrain.unpersist()
 
-    DCSolverYuchenSparseState(lambdas, gamma, models)
+    DCSolverYuchenSparseState(lambdas, models)
   }
 
 }
