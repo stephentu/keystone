@@ -139,26 +139,18 @@ object YelpDCSolver extends Serializable with Logging {
     }.cache()
     trainStr.count
     // labels encoded in {1, 2, 3, 4, 5}
-    val trainLab = scala.io.Source.fromFile(conf.trainLabelsLocation).getLines().map { row =>
+    val trainLab = sc.textFile(conf.trainLabelsLocation, conf.trainParts).map { row =>
       row.toInt - 1
-    }.toArray
-    val trainStrLocalLab = trainStr.zipWithIndex.map(x => (x._1, trainLab(x._2.toInt)) )
-
-    val trainStrLab = materialize(
-        trainStrLocalLab.repartition(conf.trainParts), "trainData")
+    }
+    val trainStrLab = materialize(trainStr.zip(trainLab).repartition(conf.trainParts), "trainData")
 
     val testStr = sc.textFile(conf.testDataLocation, conf.testParts).map { row =>
       row.split(' ')
-    }.cache()
-    testStr.count
-    // labels encoded in {1, 2, 3, 4, 5}
-    val testLab = scala.io.Source.fromFile(conf.testLabelsLocation).getLines().map { row =>
+    }
+    val testLab = sc.textFile(conf.testLabelsLocation, conf.testParts).map { row =>
       row.toInt - 1
-    }.toArray
-    val testStrLocalLab = testStr.zipWithIndex.map(x => (x._1, testLab(x._2.toInt)) )
-    val testStrLab = materialize(
-        testStrLocalLab, "testData")
-//        testStrLocalLab.repartition(conf.testParts), "testData")
+    }
+    val testStrLab = materialize(testStr.zip(testLab).repartition(conf.testParts), "testData")
 
     val (trainFeat, testFeat) = featurizeReviews(trainStrLab.map(_._1), testStrLab.map(_._1), numNgrams) 
   
@@ -170,8 +162,9 @@ object YelpDCSolver extends Serializable with Logging {
         trainLabFeat, numClasses, conf.lambdas, conf.numPartitions, conf.seed)
     
       conf.lambdas.zip(dcsolver.metrics(testLabFeat, numClasses)).foreach { case (lambda, testEval) =>
-        val testAcc = (100* testEval.totalAccuracy)
-        println(s"LAMBDA_${lambda}_TEST_ACC_${testAcc}")
+        val testAcc = (100* testEval._1.totalAccuracy)
+        val rmse = testEval._2
+        println(s"LAMBDA_${lambda}_TEST_ACC_${testAcc}_RMSE_${rmse}")
       }
       val endTime = System.nanoTime()
       println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
@@ -225,6 +218,7 @@ object YelpDCSolver extends Serializable with Logging {
     val appConfig = parse(args)
     val conf = new SparkConf().setAppName(appName)
     conf.setIfMissing("spark.master", "local[24]")
+    conf.set("spark.hadoop.mapred.min.split.size", "4563402752")
     conf.remove("spark.jars")
     val sc = new SparkContext(conf)
     run(sc, appConfig)

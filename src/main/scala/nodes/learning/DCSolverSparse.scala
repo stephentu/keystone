@@ -10,7 +10,7 @@ import breeze.linalg._
 import breeze.numerics._
 
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
-import evaluation.{AugmentedExamplesEvaluator, MulticlassClassifierEvaluator, MulticlassMetrics}
+import evaluation.{AugmentedExamplesEvaluator, MulticlassClassifierEvaluator, MulticlassMetrics, RMSEEvaluator}
 import nodes.stats.SparseLinearKernel
 import nodes.stats.UniformRangePartitioner
 import nodes.util._
@@ -31,7 +31,7 @@ case class DCSolverYuchenSparseState(
 ) extends Logging {
 
   def metrics(test: RDD[(Int, (Array[Long], Array[Double]))],
-              numClasses: Int): Seq[MulticlassMetrics] = {
+              numClasses: Int): Seq[(MulticlassMetrics, Double)] = {
 
     val nModels = models.count()
     assert(nModels == models.partitions.size)
@@ -82,15 +82,24 @@ case class DCSolverYuchenSparseState(
     }
 
     (0 until lambdas.size).map { idx =>
-      MulticlassClassifierEvaluator(
-        testAccums.map { evaluations: Seq[DenseMatrix[Double]] =>
+
+      val testPredicted = testAccums.map { evaluations: Seq[DenseMatrix[Double]] =>
           assert(lambdas.size == evaluations.size)
           val thisEvaluations = evaluations(idx)
           assert(thisEvaluations.cols == numClasses)
           MatrixUtils.matrixToRowArray(evaluations(idx) * (1.0 / nModels.toDouble)).map(MaxClassifier.apply).toSeq
-        }.flatMap(x => x),
+        }.flatMap(x => x).cache()
+
+      val mce = MulticlassClassifierEvaluator(
+        testPredicted,
         test.map(x => x._1),
         numClasses)
+
+      val rmse = RMSEEvaluator(
+        testPredicted,
+        test.map(x => x._1))
+
+      (mce, rmse)
     }
   }
 }

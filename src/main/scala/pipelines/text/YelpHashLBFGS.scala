@@ -39,8 +39,10 @@ object YelpHashLBFGS extends Serializable with Logging {
     val testPredictions = (lm andThen MaxClassifier).apply(testFeats)
     val testEval = MulticlassClassifierEvaluator(
        testPredictions, testActuals, numClasses)
+    val rmse = RMSEEvaluator(testPredictions, testActuals)
     val testAcc = (100* testEval.totalAccuracy)
-    testAcc
+    println("TEST MultiClass ACC " + testAcc)
+    rmse
   }
 
   private def materialize[T](rdd: RDD[T], s: String): RDD[T] = {
@@ -118,26 +120,34 @@ object YelpHashLBFGS extends Serializable with Logging {
     val numClasses = 5
     val numNgrams = 3
     val startTime = System.nanoTime()
+    // labels encoded in {1, 2, 3, 4, 5}
 
     val trainStr = sc.textFile(conf.trainDataLocation, conf.trainParts).map { row =>
       row.split(' ')
     }
-    // labels encoded in {1, 2, 3, 4, 5}
     val trainLab = sc.textFile(conf.trainLabelsLocation, conf.trainParts).map { row =>
       row.toInt - 1
     }
-    val trainStrLab = materialize(
-        trainStr.zip(trainLab).repartition(conf.trainParts), "trainData")
+    val trainStrLab = materialize(trainStr.zip(trainLab).repartition(conf.trainParts), "trainData")
+    //val trainLab = scala.io.Source.fromFile(conf.trainLabelsLocation).getLines().map { row =>
+    //  row.toInt - 1
+    //}.toArray
+    //val trainStrLocalLab = trainStr.zipWithIndex.map(x => (x._1, trainLab(x._2.toInt)) )
+    //val trainStrLab = materialize(
+    //    trainStrLocalLab.repartition(conf.trainParts), "trainData")
 
     val testStr = sc.textFile(conf.testDataLocation, conf.testParts).map { row =>
       row.split(' ')
     }
-    // labels encoded in {1, 2, 3, 4, 5}
     val testLab = sc.textFile(conf.testLabelsLocation, conf.testParts).map { row =>
       row.toInt - 1
     }
-    val testStrLab = materialize(
-        testStr.zip(testLab).repartition(conf.testParts), "testData")
+    val testStrLab = materialize(testStr.zip(testLab).repartition(conf.testParts), "testData")
+    // val testLab = scala.io.Source.fromFile(conf.testLabelsLocation).getLines().map { row =>
+    //   row.toInt - 1
+    // }.toArray
+    // val testStrLocalLab = testStr.zipWithIndex.map(x => (x._1, testLab(x._2.toInt)) )
+    // val testStrLab = materialize(testStrLocalLab, "testData")
 
     val (trainFeat, testFeat) = hashFeaturizeReviews(trainStrLab.map(_._1), testStrLab.map(_._1), numNgrams, conf.numHashFeatures)
 
@@ -146,18 +156,38 @@ object YelpHashLBFGS extends Serializable with Logging {
       MatrixUtils.rowsToMatrixIter(iter)
     }  
 
-    val trainLabMat = ClassLabelIndicatorsFromIntLabels(numClasses).apply(trainStrLab.map(_._2)).mapPartitions { iter =>
+    val trainLabVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(trainStrLab.map(_._2))
+    
+    val trainLabMat = trainLabVec.mapPartitions { iter =>
       MatrixUtils.rowsToMatrixIter(iter)
     }
 
-    if (conf.solver == "lbfgs") {
-      val testCbBound = testCb(testFeat, testStrLab.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
+    val testCbBound = testCb(testFeat, testStrLab.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
 
-      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda, epochCallback=Some(testCbBound), epochEveryTest=10).fitBatch(trainFeatMat, trainLabMat)
+    if (conf.solver == "lbfgs") {
+      val out = new BatchLBFGSwithL2(
+          new LeastSquaresBatchGradient,
+          numIterations=conf.numIters,
+          regParam=conf.lambda,
+          epochCallback=Some(testCbBound),
+          epochEveryTest=5,
+          normStd=false).fitBatch(trainFeatMat, trainLabMat)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
-      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+      println(s"LAMBDA_${conf.lambda}_TEST_RMSE_${testAcc}")
+
+      val endTime = System.nanoTime()
+      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+    } else if (conf.solver == "bcd") {
+      val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numHashFeatures)).fit(trainFeat, trainLabVec)
+      val testPredictions = (model andThen MaxClassifier).apply(testFeat)
+      val testEval = MulticlassClassifierEvaluator(
+         testPredictions, testStrLab.map(_._2), numClasses)
+      val rmse = RMSEEvaluator(testPredictions, testStrLab.map(_._2))
+      val testAcc = (100 * testEval.totalAccuracy)
+      //println("TEST MultiClass ACC " + testAcc)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}_RMSE_${rmse}")
 
       val endTime = System.nanoTime()
       println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
@@ -176,6 +206,7 @@ object YelpHashLBFGS extends Serializable with Logging {
       testParts: Int = 0,
       numHashFeatures: Int = 0,
       numIters: Int = 0,
+      blockSize: Int = 0,
       lambda: Double = 0.0,
       seed: Long = 0,
       solver: String = "")
@@ -195,6 +226,7 @@ object YelpHashLBFGS extends Serializable with Logging {
     opt[Int]("testParts") required() action { (x,c) => c.copy(testParts=x) } validate isPositive("testParts")
     opt[Int]("numHashFeatures") required() action { (x,c) => c.copy(numHashFeatures=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
+    opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
@@ -209,6 +241,8 @@ object YelpHashLBFGS extends Serializable with Logging {
     val appConfig = parse(args)
     val conf = new SparkConf().setAppName(appName)
     conf.setIfMissing("spark.master", "local[24]")
+    conf.remove("spark.jars")
+    conf.set("spark.hadoop.mapred.min.split.size", "4563402752")
     val sc = new SparkContext(conf)
     run(sc, appConfig)
     sc.stop()
