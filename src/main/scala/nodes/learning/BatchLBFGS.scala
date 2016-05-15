@@ -55,6 +55,7 @@ class BatchLBFGSwithL2(
     val convergenceTol: Double = 1e-4,
     val numIterations: Int = 100,
     val regParam: Double = 0.0,
+    val normStd: Boolean = false,
     val epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
     val epochEveryTest: Int = 10)
   extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] {
@@ -76,9 +77,13 @@ class BatchLBFGSwithL2(
 
 		// TODO: Do stdev division ?
     val popFeatureMean = BatchLBFGSwithL2.computeColMean(data, numExamples, numFeatures)
-    val popStdEv = BatchLBFGSwithL2.computeColStdEv(data, numExamples, popFeatureMean, numFeatures)
+    val popStdEv = if (normStd) {
+      Some(BatchLBFGSwithL2.computeColStdEv(data, numExamples, popFeatureMean, numFeatures))
+    } else {
+      None
+    }
 
-		val featureScaler = new StandardScalerModel(popFeatureMean, Some(popStdEv))
+		val featureScaler = new StandardScalerModel(popFeatureMean, popStdEv)
 		val labelScaler = new StandardScalerModel(BatchLBFGSwithL2.computeColMean(labels, numExamples, numClasses), None)
     // val featureScaler = new StandardScaler(normalizeStdDev = false).fit(data)
     // val labelScaler = new StandardScaler(normalizeStdDev = false).fit(labels)
