@@ -14,9 +14,11 @@ MASTER=`cat /root/spark-ec2/cluster-url`
 CLASS=YelpDCSolver
 
 TRAIN_FEATURES="s3n://yelp-rating-reviews/yelp_academic_dataset_review-train-tokens.txt"
-TRAIN_LABELS="/root/stephentu-keystone/yelp_academic_dataset_review-train-labels.txt"
+#TRAIN_LABELS="/root/stephentu-keystone/yelp_academic_dataset_review-train-labels.txt"
+TRAIN_LABELS="s3n://yelp-rating-reviews/yelp_academic_dataset_review-train-labels.txt"
 TEST_FEATURES="s3n://yelp-rating-reviews/yelp_academic_dataset_review-test-tokens.txt"
-TEST_LABELS="/root/stephentu-keystone/yelp_academic_dataset_review-test-labels.txt"
+#TEST_LABELS="/root/stephentu-keystone/yelp_academic_dataset_review-test-labels.txt"
+TEST_LABELS="s3n://yelp-rating-reviews/yelp_academic_dataset_review-test-labels.txt"
 
 SOLVER=$1 
 LAMBDAS=$2
