@@ -16,14 +16,15 @@ CLASS=CifarRandomFeatLBFGS
 CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip"
 CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip"
 
-NUM_PARTITIONS=512
+NUM_PARTITIONS=1024
 LAMBDAS=1e-6
-NUM_ITERS=500
-NUM_COSINES=6144
+NUM_ITERS=300
+NUM_COSINES=202752
 BLOCK_SIZE=6144
 GAMMA=0.00707
 SEED=123123
 SOLVER="lbfgs"
+NORM_STD="false"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 
 export EXECUTOR_OMP_NUM_THREADS=1
@@ -40,5 +41,6 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --numCosineFeatures $NUM_COSINES \
   --numIters $NUM_ITERS \
   --solver $SOLVER \
-  --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-logs-"$LOG_SUFFIX".log
+  --normStd $NORM_STD \
+  --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-normStd-$NORM_STD-logs-"$LOG_SUFFIX".log
 

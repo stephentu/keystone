@@ -26,6 +26,7 @@ BLOCK_SIZE=6144
 GAMMA=0.0555
 SEED=213769821231
 SOLVER="lbfgs"
+NORM_STD="false"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 
 export EXECUTOR_OMP_NUM_THREADS=1
@@ -43,5 +44,6 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --numCosineFeatures $NUM_COSINES \
   --numIters $NUM_ITERS \
   --solver $SOLVER \
-  --seed $SEED 2>&1 | tee /root/logs/timit-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-logs-"$LOG_SUFFIX".log
+  --normStd $NORM_STD \
+  --seed $SEED 2>&1 | tee /root/logs/timit-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-normStd-$NORM_STD-logs-"$LOG_SUFFIX".log
 
