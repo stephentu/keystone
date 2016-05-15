@@ -196,7 +196,13 @@ object BlockLeastSquaresEstimator {
  * @param numIter number of iterations of solver to run
  * @param lambda L2-regularization to use
  */
-class BlockLeastSquaresEstimator(blockSize: Int, numIter: Int, lambda: Double = 0.0, numFeaturesOpt: Option[Int] = None)
+class BlockLeastSquaresEstimator(
+    blockSize: Int,
+    numIter: Int,
+    lambda: Double = 0.0,
+    numFeaturesOpt: Option[Int] = None,
+    normStd: Boolean = false,
+    computeCost: Boolean = false)
   extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]]
     with WeightedNode
     with CostModel {
@@ -222,11 +228,15 @@ class BlockLeastSquaresEstimator(blockSize: Int, numIter: Int, lambda: Double = 
     // NOTE: This will cause trainingFeatures to be evaluated twice
     // which might not be optimal if its not cached ?
     val featureScalers = trainingFeatures.map { rdd =>
-      new StandardScaler(normalizeStdDev = false).fit(rdd)
+      new StandardScaler(normalizeStdDev = normStd).fit(rdd)
     }
 
-    val A = trainingFeatures.zip(featureScalers).map { case (rdd, scaler) =>
-      new RowPartitionedMatrix(scaler.apply(rdd).mapPartitions { rows =>
+    val trainingFeaturesScaled = trainingFeatures.zip(featureScalers).map { case (rdd, scaler) =>
+      scaler.apply(rdd)
+    }
+
+    val A = trainingFeaturesScaled.map { rdd =>
+      new RowPartitionedMatrix(rdd.mapPartitions { rows =>
         MatrixUtils.rowsToMatrixIter(rows)
       }.map(RowPartition), numRows, numCols)
     }
@@ -237,6 +247,10 @@ class BlockLeastSquaresEstimator(blockSize: Int, numIter: Int, lambda: Double = 
         A, b, Array(lambda), numIter, new NormalEquations()).transpose
     } else {
       bcd.solveOnePassL2(A.iterator, b, Array(lambda), new NormalEquations()).toSeq.transpose
+    }
+
+    if (computeCost) {
+      println("BLM Objective " + BlockLeastSquaresEstimator.computeCost(trainingFeaturesScaled, trainingLabels, lambda, models.head, Some(labelScaler.mean)))
     }
 
     new BlockLinearMapper(models.head, blockSize, Some(labelScaler.mean), Some(featureScalers))
