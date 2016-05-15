@@ -126,7 +126,13 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
 
     if (conf.solver == "lbfgs") {
       val testCbBound = testCb(testFeats, testLabels, numClasses, _: LinearMapper[DenseVector[Double]])
-      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda,epochCallback=Some(testCbBound), epochEveryTest=5).fitBatch(trainFeats, trainLabelsVec)
+      val out = new BatchLBFGSwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        regParam=conf.lambda,
+        normStd=conf.normStd,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeats, trainLabelsVec)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
@@ -151,6 +157,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       cosineGamma: Double = 0,
       numIters: Int = 0,
       seed: Long = 0,
+      normStd: Boolean = false,
       solver: String = "")
 
   def parse(args: Array[String]): TimitRandomFeatLBFGSConfig = new OptionParser[TimitRandomFeatLBFGSConfig](appName) {
@@ -171,6 +178,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("numCosineFeatures") required() action { (x,c) => c.copy(numCosineFeatures=x) }
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
+    opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, TimitRandomFeatLBFGSConfig()).get
 

@@ -142,7 +142,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     }
     testFeats.count
 
-    val trainLabels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels).mapPartitions { iter =>
+    val trainLabVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
+    val trainLabels = trainLabVec.mapPartitions { iter =>
       MatrixUtils.rowsToMatrixIter(iter)
     }
 
@@ -150,13 +151,29 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
     if (conf.solver == "lbfgs") {
-
       val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
-
-      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda, epochCallback=Some(testCbBound), epochEveryTest=5).fitBatch(trainFeats, trainLabels)
+      val out = new BatchLBFGSwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        regParam=conf.lambda,
+        normStd=conf.normStd,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeats, trainLabels)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+
+      val endTime = System.nanoTime()
+      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+    } else if (conf.solver == "bcd") {
+      val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
+      val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(trainFeatVec, trainLabVec)
+      val testPredictions = (model).apply(testFeats)
+      val testEval = AugmentedExamplesEvaluator(
+         testAll.map(_._1), testPredictions, testAll.map(_._2), numClasses)
+      val testAcc = (100 * testEval.totalAccuracy)
+      //println("TEST MultiClass ACC " + testAcc)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
 
       val endTime = System.nanoTime()
@@ -178,6 +195,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       cosineGamma: Double = 0,
       numIters: Int = 0,
       seed: Long = 0,
+      normStd: Boolean = false,
       solver: String = "")
 
   def parse(args: Array[String]): CifarRandomFeatLBFGSConfig = new OptionParser[CifarRandomFeatLBFGSConfig](appName) {
@@ -197,6 +215,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("numCosineFeatures") required() action { (x,c) => c.copy(numCosineFeatures=x) }
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
+    opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, CifarRandomFeatLBFGSConfig()).get
 
