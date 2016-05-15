@@ -21,7 +21,7 @@ NUM_PARTITIONS=$3
 LAMBDAS=$2
 GAMMA=$1
 SEED=$4
-SOLVER="dcyuchen"
+SOLVER="dcsvm"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 
 export EXECUTOR_OMP_NUM_THREADS=8
@@ -33,8 +33,9 @@ OMP_NUM_THREADS=8 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --trainParts $NUM_PARTITIONS \
   --testParts $NUM_PARTITIONS \
   --numPartitions $NUM_PARTITIONS \
+  --numModels $NUM_PARTITIONS \
   --lambdas $LAMBDAS \
   --gamma $GAMMA \
-  --useYuchen true \
+  --solver $SOLVER \
   --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambdas-$LAMBDAS-nummodels-$NUM_MODELS-logs-"$LOG_SUFFIX".log
 
