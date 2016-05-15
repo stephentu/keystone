@@ -150,8 +150,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val featTime = System.nanoTime()
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
+    val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
     if (conf.solver == "lbfgs") {
-      val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
       val out = new BatchLBFGSwithL2(
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
@@ -163,9 +163,19 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+    } else if (conf.solver == "sgd") {
+      val out = new MiniBatchSGDwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        stepSize=conf.stepSize,
+        regParam=conf.lambda,
+        normStd=conf.normStd,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeats, trainLabels)
 
-      val endTime = System.nanoTime()
-      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+
     } else if (conf.solver == "bcd") {
       val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
       val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(trainFeatVec, trainLabVec)
@@ -175,12 +185,12 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       val testAcc = (100 * testEval.totalAccuracy)
       //println("TEST MultiClass ACC " + testAcc)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
-
-      val endTime = System.nanoTime()
-      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
     } else {
       logError("solver not recognized")
     }
+    val endTime = System.nanoTime()
+    println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+
     null
   }
 
@@ -196,6 +206,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       numIters: Int = 0,
       seed: Long = 0,
       normStd: Boolean = false,
+      stepSize: Double = 0.0,
       solver: String = "")
 
   def parse(args: Array[String]): CifarRandomFeatLBFGSConfig = new OptionParser[CifarRandomFeatLBFGSConfig](appName) {
@@ -216,6 +227,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
     opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
+    opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, CifarRandomFeatLBFGSConfig()).get
 
