@@ -153,7 +153,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
 
       val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
 
-      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda, epochCallback=Some(testCbBound), epochEveryTest=10).fitBatch(trainFeats, trainLabels)
+      val out = new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters, regParam=conf.lambda, epochCallback=Some(testCbBound), epochEveryTest=5).fitBatch(trainFeats, trainLabels)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
