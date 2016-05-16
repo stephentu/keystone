@@ -35,6 +35,7 @@ object MnistRandomFFT extends Serializable with Logging {
       CsvDataLoader(sc, conf.trainLocation, conf.numPartitions)
         // The pipeline expects 0-indexed class labels, but the labels in the file are 1-indexed
         .map(x => (x(0).toInt - 1, x(1 until x.length)))
+        .repartition(conf.numPartitions)
         .cache())
     val labels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
 
@@ -55,7 +56,7 @@ object MnistRandomFFT extends Serializable with Logging {
             stepSize=conf.sgdStepSize, miniBatchFraction=conf.sgdMiniBatchFraction, regParam=conf.lambda.getOrElse(0))
       } else if (conf.solver == "cocoa") {
         new CocoaSDCAwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
-          regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta,
+          regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta, computeCost=true,
           numLocalItersFraction=conf.cocoaNumLocalItersFraction)
       } else {
         new BlockLeastSquaresEstimator(conf.blockSize, 1, conf.lambda.getOrElse(0), computeCost=true)
