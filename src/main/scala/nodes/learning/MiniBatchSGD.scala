@@ -40,18 +40,16 @@ import utils.{MatrixUtils, Stats}
 
 /**
  * :: DeveloperApi ::
- * Class used to solve an optimization problem using Limited-memory BFGS.
+ * Class used to solve an optimization problem using Mini-batch SGD.
  * Reference: [[http://en.wikipedia.org/wiki/Limited-memory_BFGS]]
  *
  * @param gradient Gradient function to be used.
- * @param numCorrections 3 < numCorrections < 10 is recommended.
- * @param convergenceTol convergence tolerance for L-BFGS
+ * @param convergenceTol convergence tolerance
  * @param regParam L2 regularization
  * @param numIterations max number of iterations to run 
  */
 class MiniBatchSGDwithL2(
     val gradient: BatchGradient, 
-    val numCorrections: Int  = 10,
     val convergenceTol: Double = 1e-4,
     val numIterations: Int = 100,
     val regParam: Double = 0.0,
@@ -96,7 +94,6 @@ class MiniBatchSGDwithL2(
       featureScaler,
       labelScaler,
       gradient,
-      numCorrections,
       convergenceTol,
       numIterations,
       stepSize,
@@ -173,7 +170,6 @@ object MiniBatchSGDwithL2 extends Logging {
       featureScaler: StandardScalerModel,
       labelScaler: StandardScalerModel,
       gradient: BatchGradient,
-      numCorrections: Int,
       convergenceTol: Double,
       maxNumIterations: Int,
       stepSize: Double,
@@ -209,7 +205,7 @@ object MiniBatchSGDwithL2 extends Logging {
     var currentWeights = initialWeights
     var currentLoss = 0.0
     var epoch = 0
-    while (epoch < maxNumIterations && !isConverged(currentWeights, prevWeights, convergenceTol)) {
+    while (epoch < maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
       val epochBegin = System.nanoTime
       val (loss, gradient) = gradFun.calculate(currentWeights)
 
