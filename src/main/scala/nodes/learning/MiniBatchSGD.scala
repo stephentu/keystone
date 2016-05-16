@@ -204,22 +204,33 @@ object MiniBatchSGDwithL2 extends Logging {
     var prevWeights = null
     var currentWeights = initialWeights
     var currentLoss = 0.0
-    var epoch = 0
-    while (epoch < maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
+    var epoch = 1
+    var thisIterStepSize = stepSize
+    while (epoch <= maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
       val epochBegin = System.nanoTime
       val (loss, gradient) = gradFun.calculate(currentWeights)
 
       lossHistory += loss
       val prevWeights = currentWeights
 
+      // Annealing
+      // Half step size, double epoch size
+      val epochIsPow2 = math.log(epoch)/math.log(2)
+      if (epochIsPow2 % 1 == 0.0) {
+        thisIterStepSize = thisIterStepSize / 2
+        println("changing step size at " + epoch + " to " + thisIterStepSize)
+      }
       // TODO: This uses sqrt(stepSize) policy, we can change this if reqd
-      val thisIterStepSize = stepSize / math.sqrt(epoch)
+      // val thisIterStepSize = stepSize / math.sqrt(epoch)
+
       currentWeights = prevWeights * (1.0 - thisIterStepSize * regParam)
       currentWeights -= thisIterStepSize * gradient 
 
+      println("For epoch " + epoch + " step size " + thisIterStepSize)
       println("For epoch " + epoch + " loss is " + loss)
       println("For epoch " + epoch + " grad norm is " + norm(gradient))
       println("For epoch " + epoch + " x norm " + norm(prevWeights))
+      println("For epoch " + epoch + " new x norm " + norm(currentWeights))
       val epochTime = System.nanoTime - epochBegin
       println("EPOCH_" + epoch + "_time: " + epochTime)
       if (!epochCallback.isEmpty && epoch % epochEveryTest == 1) {
@@ -257,6 +268,7 @@ object MiniBatchSGDwithL2 extends Logging {
     numExamples: Long,
     numFeatures: Int,
     numClasses: Int) {
+
     def calculate(weights: DenseVector[Double]): (Double, DenseVector[Double]) = {
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
@@ -264,10 +276,11 @@ object MiniBatchSGDwithL2 extends Logging {
 			val localColMeansBC = dataMat.context.broadcast(dataColMeans)
       val localColStdevsBC = dataMat.context.broadcast(dataColStdevs)
       val localGradient = gradient
+      val localMiniBatchFraction = miniBatchFraction
 
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, localColStdevsBC.value, x._2,
-            bcW.value, miniBatchFraction)
+            bcW.value, localMiniBatchFraction)
         }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => { 
           a._1 += b._1
           (a._1, a._2 + b._2)
