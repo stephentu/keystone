@@ -126,19 +126,36 @@ trait BatchGradient extends Serializable {
       dataColMeans: DenseVector[Double],
       dataColStdevs: Option[DenseVector[Double]],
       labels: DenseMatrix[Double],
-      weights: DenseMatrix[Double])
+      weights: DenseMatrix[Double],
+      miniBatchFraction: Double = 1.0)
     : (DenseMatrix[Double], Double)
 }
 
 class LeastSquaresBatchGradient extends BatchGradient {
-  
+
+  def sampleRows(in: DenseMatrix[Double], sampleFraction: Double) = {
+    val numRowsToKeep = math.ceil(in.rows * sampleFraction).toInt
+    val arr = (0 until in.rows).iterator
+    // smapl
+    val rowsToKeep = scala.util.Random.shuffle(arr).take(numRowsToKeep).toSeq
+    // NOTE: This makes a copy ?
+    in(rowsToKeep, ::)
+  }
+
   def compute(
       data: DenseMatrix[Double],
       dataColMeans: DenseVector[Double],
       dataColStdevs: Option[DenseVector[Double]],
       labels: DenseMatrix[Double],
-      weights: DenseMatrix[Double])
+      weights: DenseMatrix[Double],
+      miniBatchFraction: Double = 1.0)
     : (DenseMatrix[Double], Double) = {
+
+    val dataSample = if (miniBatchFraction == 1.0) {
+      data
+    } else {
+      sampleRows(data, miniBatchFraction)
+    }
 
     // Least Squares Gradient is At.(Ax - b)
     val axb = (data * weights)

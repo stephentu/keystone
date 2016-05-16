@@ -56,6 +56,7 @@ class MiniBatchSGDwithL2(
     val numIterations: Int = 100,
     val regParam: Double = 0.0,
     val stepSize: Double = 1.0,
+    val miniBatchFraction: Double = 0.1,
     val normStd: Boolean = false,
     val epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
     val epochEveryTest: Int = 10)
@@ -99,6 +100,7 @@ class MiniBatchSGDwithL2(
       convergenceTol,
       numIterations,
       stepSize,
+      miniBatchFraction,
       regParam,
       epochCallback,
       epochEveryTest)
@@ -175,6 +177,7 @@ object MiniBatchSGDwithL2 extends Logging {
       convergenceTol: Double,
       maxNumIterations: Int,
       stepSize: Double,
+      miniBatchFraction: Double,
       regParam: Double,
       epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
       epochEveryTest: Int = 10): DenseMatrix[Double] = {
@@ -193,8 +196,8 @@ object MiniBatchSGDwithL2 extends Logging {
     val endConversionTime = System.currentTimeMillis()
     logInfo(s"PIPELINE TIMING: Finished System Conversion And Transfer in ${endConversionTime - startConversionTime} ms")
 
-    val gradFun = new GradFun(data, featureScaler.mean, featureScaler.std, labelsMat, gradient, regParam, numExamples, numFeatures,
-      numClasses)
+    val gradFun = new GradFun(data, featureScaler.mean, featureScaler.std, labelsMat, gradient, regParam, 
+      miniBatchFraction, numExamples, numFeatures, numClasses)
 
     val initialWeights = DenseVector.zeros[Double](numFeatures * numClasses)
 
@@ -254,6 +257,7 @@ object MiniBatchSGDwithL2 extends Logging {
     labelsMat: RDD[DenseMatrix[Double]],
     gradient: BatchGradient,
     regParam: Double,
+    miniBatchFraction: Double,
     numExamples: Long,
     numFeatures: Int,
     numClasses: Int) {
@@ -266,7 +270,8 @@ object MiniBatchSGDwithL2 extends Logging {
       val localGradient = gradient
 
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
-          localGradient.compute(x._1, localColMeansBC.value, localColStdevsBC.value, x._2, bcW.value)
+          localGradient.compute(x._1, localColMeansBC.value, localColStdevsBC.value, x._2,
+            bcW.value, miniBatchFraction)
         }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => { 
           a._1 += b._1
           (a._1, a._2 + b._2)

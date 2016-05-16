@@ -29,6 +29,8 @@ SEED=1213279863
 NUM_PARTITIONS=512
 TEST_PARTITIONS=512
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
+STEP_SIZE=0.1
+MINI_BATCH_FRACTION=1.0
 
 export EXECUTOR_OMP_NUM_THREADS=1
 
@@ -45,5 +47,7 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --blockSize $BLOCK_SIZE \
   --lambda $LAMBDA \
   --solver $SOLVER \
+  --stepSize $STEP_SIZE \
+  --miniBatchFraction $MINI_BATCH_FRACTION \
   --seed $SEED 2>&1 | tee /root/logs/yelp-solver-$SOLVER-lambda-$LAMBDA-numHash-$NUM_HASH_FEATURES-numIters-$NUM_ITERS-logs-"$LOG_SUFFIX".log
 

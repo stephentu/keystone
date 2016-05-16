@@ -176,9 +176,19 @@ object YelpHashLBFGS extends Serializable with Logging {
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_RMSE_${testAcc}")
-
-      val endTime = System.nanoTime()
-      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+    } else if (conf.solver == "sgd") {
+      val out = new MiniBatchSGDwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        stepSize=conf.stepSize,
+        regParam=conf.lambda,
+        normStd=false,
+        miniBatchFraction=conf.miniBatchFraction,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeatMat, trainLabMat)
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_RMSE_${testAcc}")
     } else if (conf.solver == "bcd") {
       val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numHashFeatures)).fit(trainFeat, trainLabVec)
       val testPredictions = (model andThen MaxClassifier).apply(testFeat)
@@ -188,12 +198,11 @@ object YelpHashLBFGS extends Serializable with Logging {
       val testAcc = (100 * testEval.totalAccuracy)
       //println("TEST MultiClass ACC " + testAcc)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}_RMSE_${rmse}")
-
-      val endTime = System.nanoTime()
-      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
     } else {
       logError("solver not recognized")
     }
+    val endTime = System.nanoTime()
+    println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
     null
   }
 
@@ -208,6 +217,8 @@ object YelpHashLBFGS extends Serializable with Logging {
       numIters: Int = 0,
       blockSize: Int = 0,
       lambda: Double = 0.0,
+      stepSize: Double = 0.0,
+      miniBatchFraction: Double = 0.0,
       seed: Long = 0,
       solver: String = "")
 
@@ -228,6 +239,8 @@ object YelpHashLBFGS extends Serializable with Logging {
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
+    opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
+    opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, YelpHashLBFGSConfig()).get

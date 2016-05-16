@@ -170,6 +170,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
         stepSize=conf.stepSize,
         regParam=conf.lambda,
         normStd=conf.normStd,
+        miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
         epochEveryTest=5).fitBatch(trainFeats, trainLabels)
 
@@ -207,6 +208,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       seed: Long = 0,
       normStd: Boolean = false,
       stepSize: Double = 0.0,
+      miniBatchFraction: Double = 0.0,
       solver: String = "")
 
   def parse(args: Array[String]): CifarRandomFeatLBFGSConfig = new OptionParser[CifarRandomFeatLBFGSConfig](appName) {
@@ -228,6 +230,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
     opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
+    opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, CifarRandomFeatLBFGSConfig()).get
 
