@@ -5,7 +5,7 @@ import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import evaluation.MulticlassClassifierEvaluator
 import loaders.{CsvDataLoader, LabeledData}
 import nodes.learning._
-import nodes.stats.{LinearRectifier, PaddedFFT, RandomSignNode}
+import nodes.stats.{LinearRectifier, PaddedFFT, RandomSignNode, NormalizeRows}
 import nodes.util._
 import org.apache.commons.math3.random.MersenneTwister
 import org.apache.spark.{SparkConf, SparkContext}
@@ -42,7 +42,7 @@ object MnistRandomFFT extends Serializable with Logging {
       Seq.fill(conf.numFFTs) {
         RandomSignNode(mnistImageSize, randomSignSource) andThen PaddedFFT() andThen LinearRectifier(0.0)
       }
-    } andThen VectorCombiner()
+    } andThen VectorCombiner() andThen NormalizeRows andThen (new Cacher[DenseVector[Double]])
 
     val solver: LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] = 
       if (conf.solver == "bcd") {
@@ -50,6 +50,9 @@ object MnistRandomFFT extends Serializable with Logging {
       } else if (conf.solver == "lbfgs") {
         new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
             regParam=conf.lambda.getOrElse(0))
+      } else if (conf.solver == "sgd") {
+        new MiniBatchSGDwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
+            stepSize=conf.sgdStepSize, miniBatchFraction=conf.sgdMiniBatchFraction, regParam=conf.lambda.getOrElse(0))
       } else if (conf.solver == "cocoa") {
         new CocoaSDCAwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
           regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta,
@@ -90,6 +93,8 @@ object MnistRandomFFT extends Serializable with Logging {
       numPartitions: Int = 10,
       solver: String = "bcd",
       numIters: Int = 10,
+      sgdStepSize: Double = 0.1,
+      sgdMiniBatchFraction: Double = 1.0,
       cocoaNumLocalItersFraction: Double = 1.0,
       cocoaBeta: Double = 1.0,
       lambda: Option[Double] = None,
@@ -102,6 +107,8 @@ object MnistRandomFFT extends Serializable with Logging {
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
     opt[String]("solver") action { (x,c) => c.copy(solver=x) }
     opt[Int]("numIters") action { (x,c) => c.copy(numIters=x) }
+    opt[Double]("sgdStepSize") action { (x,c) => c.copy(sgdStepSize=x) }
+    opt[Double]("sgdMiniBatchFraction") action { (x,c) => c.copy(sgdMiniBatchFraction=x) }
     opt[Double]("cocoaBeta") action { (x,c) => c.copy(cocoaBeta=x) }
     opt[Double]("cocoaNumLocalItersFraction") action { (x,c) => c.copy(cocoaNumLocalItersFraction=x) }
     opt[Int]("numFFTs") action { (x,c) => c.copy(numFFTs=x) }
