@@ -166,7 +166,7 @@ object CocoaSDCAwithL2 extends Logging {
       println("For epoch " + epoch + " x norm " + norm(prevWeights.toDenseVector))
       if (computeCost) {
         val cost = LinearMapEstimator.computeCost(featureScaler.apply(data.flatMap(x =>
-          MatrixUtils.matrixToRowArray(x).iterator)), labels.flatMap(x =>
+          MatrixUtils.matrixToRowArray(x).iterator)), labelsMat.flatMap(x =>
           MatrixUtils.matrixToRowArray(x).iterator), regParam, currentWeights, None)
         println("For epoch " + epoch + " cost " + cost)
       }
@@ -323,7 +323,7 @@ object CocoaSDCAwithL2 extends Logging {
       val update = (x * del_alpha.t) * (1.0/lambda)
       // println("update norm " + norm(update.toDenseVector))
       if (!plus) {
-       w += update
+        w += update
       }
       deltaW += update
       alpha(idx, ::) := newAlpha
