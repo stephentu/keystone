@@ -16,6 +16,57 @@ import edu.berkeley.cs.amplab.mlmatrix.util.{Utils => MLMatrixUtils}
  */
 object MatrixUtils extends Serializable {
 
+	def powInPlace(in: DenseVector[Double], power: Double) = {
+		var i = 0
+		while (i < in.size) {
+			in(i) = math.pow(in(i), power)
+			i = i + 1
+		}
+		in
+	}
+
+  def computeColMean(
+    data: RDD[DenseMatrix[Double]],
+    nRows: Long,
+    nCols: Int): DenseVector[Double] = {
+    // To compute the column means, compute the colSum in each partition, add it
+    // up and then divide by number of rows.
+    data.aggregate(DenseVector.zeros[Double](nCols))(
+			seqOp = (a: DenseVector[Double], b: DenseMatrix[Double]) => {
+	      a += sum(b(::, *)).toDenseVector
+			},
+			combOp = (a: DenseVector[Double], b: DenseVector[Double]) => a += b
+    ) /= nRows.toDouble
+  }
+
+	def computeColStdEv(
+	    data: RDD[DenseMatrix[Double]],
+	    nRows: Long,
+	 	  dataMean: DenseVector[Double],
+	    nCols: Int): DenseVector[Double] = {
+		val meanBC = data.context.broadcast(dataMean)
+	  // To compute the std dev, compute (x - mean)^2 for each row and add it up 
+	  // and then divide by number of rows.
+		val variance = data.aggregate(DenseVector.zeros[Double](nCols))(
+			seqOp = (a: DenseVector[Double], b: DenseMatrix[Double]) => {
+				var i = 0
+				val mean = meanBC.value
+				while (i < b.rows) {
+				  val diff = (b(i, ::).t - mean)
+					powInPlace(diff, 2.0)
+					a += diff
+					i = i + 1
+				}
+				a
+		  },
+			combOp = (a: DenseVector[Double], b: DenseVector[Double]) => a += b) 
+		variance /= (nRows.toDouble - 1.0)
+		powInPlace(variance, 0.5)
+    variance
+	}
+
+
+
   /**
    * Converts a matrix to an array of rows.
    * @param mat Input matrix.

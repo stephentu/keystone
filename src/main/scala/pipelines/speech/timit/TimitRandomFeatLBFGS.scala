@@ -117,31 +117,54 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     }
     testFeats.count
 
-    val trainLabelsVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels).mapPartitions { iter =>
+    val trainLabelsVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
+    val trainLabelsMat = trainLabelsVec.mapPartitions { iter =>
       MatrixUtils.rowsToMatrixIter(iter)
     }
 
     val featTime = System.nanoTime()
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
+    val testCbBound = testCb(testFeats, testLabels, numClasses, _: LinearMapper[DenseVector[Double]])
     if (conf.solver == "lbfgs") {
-      val testCbBound = testCb(testFeats, testLabels, numClasses, _: LinearMapper[DenseVector[Double]])
       val out = new BatchLBFGSwithL2(
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
         normStd=conf.normStd,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeats, trainLabelsVec)
-
+        epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
-      val endTime = System.nanoTime()
-      println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
+    } else if (conf.solver == "sgd") {
+      val out = new MiniBatchSGDwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        stepSize=conf.stepSize,
+        regParam=conf.lambda,
+        normStd=conf.normStd,
+        miniBatchFraction=conf.miniBatchFraction,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+    } else if (conf.solver == "bcd") {
+      val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
+      val model = new BlockLeastSquaresEstimator(
+        conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(
+          trainFeatVec, trainLabelsVec)
+      val testPredictions = (model andThen MaxClassifier).apply(testFeats)
+      val testEval = MulticlassClassifierEvaluator(
+          testPredictions, testLabels, numClasses)
+      val testAcc = (100* testEval.totalAccuracy)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else {
       logError("solver not recognized")
     }
+    val endTime = System.nanoTime()
+    println(s"TIME_FULL_PIPELINE_${(endTime-startTime)/1e9}")
     null
   }
 
@@ -158,6 +181,8 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       numIters: Int = 0,
       seed: Long = 0,
       normStd: Boolean = false,
+      stepSize: Double = 0.0,
+      miniBatchFraction: Double = 0.0,
       solver: String = "")
 
   def parse(args: Array[String]): TimitRandomFeatLBFGSConfig = new OptionParser[TimitRandomFeatLBFGSConfig](appName) {
@@ -179,6 +204,8 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
     opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
+    opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
+    opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, TimitRandomFeatLBFGSConfig()).get
 

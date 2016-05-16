@@ -4,7 +4,7 @@ import breeze.linalg.DenseVector
 import breeze.stats.distributions.{RandBasis, ThreadLocalRandomGenerator}
 import evaluation.MulticlassClassifierEvaluator
 import loaders.{CsvDataLoader, LabeledData}
-import nodes.learning.BlockLeastSquaresEstimator
+import nodes.learning._
 import nodes.stats.{LinearRectifier, PaddedFFT, RandomSignNode}
 import nodes.util._
 import org.apache.commons.math3.random.MersenneTwister
@@ -13,6 +13,7 @@ import pipelines._
 import scopt.OptionParser
 import utils.Image
 import workflow.Pipeline
+import workflow.LabelEstimator
 
 
 object MnistRandomFFT extends Serializable with Logging {
@@ -43,10 +44,23 @@ object MnistRandomFFT extends Serializable with Logging {
       }
     } andThen VectorCombiner()
 
-    val pipeline = featurizer andThen
-        (new BlockLeastSquaresEstimator(conf.blockSize, 1, conf.lambda.getOrElse(0)),
-          train.data, labels) andThen
-        MaxClassifier
+    val solver: LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] = 
+      if (conf.solver == "bcd") {
+        new BlockLeastSquaresEstimator(conf.blockSize, 1, conf.lambda.getOrElse(0), computeCost=true)
+      } else if (conf.solver == "lbfgs") {
+        new BatchLBFGSwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
+            regParam=conf.lambda.getOrElse(0))
+      } else if (conf.solver == "cocoa") {
+        new CocoaSDCAwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
+          regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta,
+          numLocalItersFraction=conf.cocoaNumLocalItersFraction)
+      } else {
+        new BlockLeastSquaresEstimator(conf.blockSize, 1, conf.lambda.getOrElse(0), computeCost=true)
+      }
+
+    val featurized = featurizer.apply(train.data)
+    val model = solver.withData(featurized, labels)
+    val pipeline = featurizer andThen model andThen MaxClassifier
 
     val test = LabeledData(
       CsvDataLoader(sc, conf.testLocation, conf.numPartitions)
@@ -74,6 +88,10 @@ object MnistRandomFFT extends Serializable with Logging {
       numFFTs: Int = 200,
       blockSize: Int = 2048,
       numPartitions: Int = 10,
+      solver: String = "bcd",
+      numIters: Int = 10,
+      cocoaNumLocalItersFraction: Double = 1.0,
+      cocoaBeta: Double = 1.0,
       lambda: Option[Double] = None,
       seed: Long = 0)
 
@@ -82,6 +100,10 @@ object MnistRandomFFT extends Serializable with Logging {
     help("help") text("prints this usage text")
     opt[String]("trainLocation") required() action { (x,c) => c.copy(trainLocation=x) }
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
+    opt[String]("solver") action { (x,c) => c.copy(solver=x) }
+    opt[Int]("numIters") action { (x,c) => c.copy(numIters=x) }
+    opt[Double]("cocoaBeta") action { (x,c) => c.copy(cocoaBeta=x) }
+    opt[Double]("cocoaNumLocalItersFraction") action { (x,c) => c.copy(cocoaNumLocalItersFraction=x) }
     opt[Int]("numFFTs") action { (x,c) => c.copy(numFFTs=x) }
     opt[Int]("blockSize") validate { x =>
       // Bitwise trick to test if x is a power of 2
