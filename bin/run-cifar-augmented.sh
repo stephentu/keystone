@@ -16,12 +16,12 @@ CLASS=CifarDCSolver
 CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip"
 CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip"
 
-NUM_MODELS=$3
-NUM_PARTITIONS=$3
-LAMBDAS=$2
-GAMMA=$1
-SEED=$4
-SOLVER="dcsvm"
+SOLVER=$1
+GAMMA=$2
+LAMBDAS=$3
+NUM_MODELS=$4
+NUM_PARTITIONS=$4
+SEED=$5
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 
 export EXECUTOR_OMP_NUM_THREADS=8
