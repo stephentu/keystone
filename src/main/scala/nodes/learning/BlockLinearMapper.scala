@@ -220,8 +220,8 @@ class BlockLeastSquaresEstimator(
       trainingLabels: RDD[DenseVector[Double]]): BlockLinearMapper = {
     val labelScaler = new StandardScaler(normalizeStdDev = false).fit(trainingLabels)
     // Find out numRows, numCols once
-    val b = RowPartitionedMatrix.fromArray(
-      labelScaler.apply(trainingLabels).map(_.toArray)).cache()
+    val trainingLabelsZm = labelScaler.apply(trainingLabels)
+    val b = RowPartitionedMatrix.fromArray(trainingLabelsZm.map(_.toArray)).cache()
     val numRows = Some(b.numRows())
     val numCols = Some(blockSize.toLong)
 
@@ -250,7 +250,8 @@ class BlockLeastSquaresEstimator(
     }
 
     if (computeCost) {
-      println("BLM Objective " + BlockLeastSquaresEstimator.computeCost(trainingFeaturesScaled, trainingLabels, lambda, models.head, Some(labelScaler.mean)))
+      println("BLM Objective " + BlockLeastSquaresEstimator.computeCost(trainingFeaturesScaled,
+        trainingLabelsZm, lambda, models.head, None))
     }
 
     new BlockLinearMapper(models.head, blockSize, Some(labelScaler.mean), Some(featureScalers))
