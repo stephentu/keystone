@@ -40,6 +40,7 @@ class CocoaSDCAwithL2(
     val numLocalItersFraction: Double = 1.0,
     val gamma: Double = 1.0,
     val beta: Double = 1.0,
+    val computeCost: Boolean = false,
     val epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
     val epochEveryTest: Int = 10)
   extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] {
@@ -83,6 +84,7 @@ class CocoaSDCAwithL2(
       numLocalItersFraction,
       gamma,
       beta,
+      computeCost,
       epochCallback,
       epochEveryTest)
 
@@ -105,10 +107,11 @@ object CocoaSDCAwithL2 extends Logging {
       numLocalItersFraction: Double,
       gamma: Double,
       beta: Double,
+      computeCost: Boolean,
       epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
       epochEveryTest: Int = 10): DenseMatrix[Double] = {
 
-    // TODO: Add this as a parameter !
+    // TODO: Add this as a parameter ?!
     val plus = false
     val chkptIter = 20
     val seed = 12654764
@@ -131,6 +134,7 @@ object CocoaSDCAwithL2 extends Logging {
 
     var alpha = labels.map(x => DenseMatrix.zeros[Double](x.rows, x.cols)).cache()
     val scaling = if (plus) gamma else beta/parts
+    println("Scaling is " + scaling)
 
     val initialWeights = DenseMatrix.zeros[Double](numFeatures, numClasses)
     var prevWeights = null
@@ -159,11 +163,13 @@ object CocoaSDCAwithL2 extends Logging {
       val prevWeights = currentWeights
       val epochTime = System.nanoTime - epochBegin
 
-      val cost = LinearMapEstimator.computeCost(featureScaler.apply(data.flatMap(x =>
-        MatrixUtils.matrixToRowArray(x).iterator)), labelsMat.flatMap(x =>
-        MatrixUtils.matrixToRowArray(x).iterator), regParam, currentWeights, Some(labelScaler.mean))
       println("For epoch " + epoch + " x norm " + norm(prevWeights.toDenseVector))
-      println("For epoch " + epoch + " cost " + cost)
+      if (computeCost) {
+        val cost = LinearMapEstimator.computeCost(featureScaler.apply(data.flatMap(x =>
+          MatrixUtils.matrixToRowArray(x).iterator)), labels.flatMap(x =>
+          MatrixUtils.matrixToRowArray(x).iterator), regParam, currentWeights, None)
+        println("For epoch " + epoch + " cost " + cost)
+      }
       println("EPOCH_" + epoch + "_time: " + epochTime)
       if (!epochCallback.isEmpty && epoch % epochEveryTest == 1) {
         val lm = LinearMapper[DenseVector[Double]](currentWeights, Some(labelScaler.mean), Some(featureScaler))
@@ -274,7 +280,8 @@ object CocoaSDCAwithL2 extends Logging {
     featureStdEv: Option[DenseVector[Double]]): (DenseMatrix[Double], DenseMatrix[Double]) = {
     
     var w = wInit
-    val nLocal = localFeatures.rows.toDouble
+    val nLocal = localFeatures.rows
+    val nD = n.toDouble
     var r = new scala.util.Random(seed)
     var deltaW = DenseMatrix.zeros[Double](wInit.rows, wInit.cols)
 
@@ -284,7 +291,7 @@ object CocoaSDCAwithL2 extends Logging {
     for (i <- 1 to localIters) {
 
       // randomly select a local example
-      val idx = r.nextInt(localFeatures.rows)
+      val idx = r.nextInt(nLocal)
       val x = localFeatures(idx, ::).t - featureMeans
       featureStdEv.foreach(stdev => x :/= stdev)
       val y = localLabels(idx, ::).t
@@ -306,23 +313,24 @@ object CocoaSDCAwithL2 extends Logging {
 
       // compute square loss gradient
       val del_alpha = if (!plus) {
-        (y - w.t * x - nLocal * alpha(idx, ::).t) / (nLocal + norm(x)/lambda)
+        (y - w.t * x - nD * alpha(idx, ::).t) / (nD + norm(x)/lambda)
       } else {
-        (y - (w.t * x) * sigma - nLocal * alpha(idx, ::).t) / (nLocal + (norm(x) * sigma) / lambda)
+        (y - (w.t * x) * sigma - nD * alpha(idx, ::).t) / (nD + (norm(x) * sigma) / lambda)
       }
       val newAlpha = alpha(idx, ::) + del_alpha.t
 
       // update primal and dual variables
       val update = (x * del_alpha.t) * (1.0/lambda)
-      println("update norm " + norm(update.toDenseVector))
+      // println("update norm " + norm(update.toDenseVector))
       if (!plus) {
-        w += update
+       w += update
       }
       deltaW += update
       alpha(idx, ::) := newAlpha
     }
 
     val deltaAlpha = alpha - alphaOld
+
     return (deltaAlpha, deltaW)
   }
 
