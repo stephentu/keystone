@@ -1,6 +1,6 @@
 package nodes.stats
 
-import breeze.linalg.DenseVector
+import breeze.linalg._
 import breeze.numerics.sqrt
 import org.apache.spark.mllib.stat.MultivariateOnlineSummarizer
 import org.apache.spark.rdd.RDD
@@ -27,6 +27,17 @@ class StandardScalerModel(val mean: DenseVector[Double], val std: Option[DenseVe
     std.foreach(x => {
       out :/= x
     })
+    out
+  }
+
+  def applyBatch(in: RDD[DenseMatrix[Double]]): RDD[DenseMatrix[Double]] = {
+    val out = in.map { x =>
+      val xOut = x(*, ::) - mean
+      std.foreach(x => {
+        xOut(*, ::) :/= x
+      })
+      xOut
+    }
     out
   }
 }

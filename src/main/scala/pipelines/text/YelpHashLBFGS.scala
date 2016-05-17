@@ -189,6 +189,20 @@ object YelpHashLBFGS extends Serializable with Logging {
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_RMSE_${testAcc}")
+    } else if (conf.solver == "cocoa") {
+      val out = new CocoaSDCAwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        regParam=conf.lambda,
+        normStd=false,
+        numLocalItersFraction=conf.cocoaLocalItersFraction,
+        beta=conf.cocoaBeta,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeatMat, trainLabMat)
+
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "bcd") {
       val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numHashFeatures)).fit(trainFeat, trainLabVec)
       val testPredictions = (model andThen MaxClassifier).apply(testFeat)
@@ -219,6 +233,8 @@ object YelpHashLBFGS extends Serializable with Logging {
       lambda: Double = 0.0,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
+      cocoaBeta: Double = 0.0,
+      cocoaLocalItersFraction: Double = 0.0,
       seed: Long = 0,
       solver: String = "")
 
@@ -241,6 +257,8 @@ object YelpHashLBFGS extends Serializable with Logging {
     opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
+    opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
+    opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }
     opt[Long]("seed") required() action { (x,c) => c.copy(seed=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, YelpHashLBFGSConfig()).get
@@ -257,6 +275,7 @@ object YelpHashLBFGS extends Serializable with Logging {
     conf.remove("spark.jars")
     conf.set("spark.hadoop.mapred.min.split.size", "4563402752")
     val sc = new SparkContext(conf)
+    sc.setCheckpointDir("/tmp/spark-checkpoint")
     run(sc, appConfig)
     sc.stop()
   }

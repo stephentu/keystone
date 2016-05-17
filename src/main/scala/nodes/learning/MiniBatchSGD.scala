@@ -314,6 +314,10 @@ object MiniBatchSGDwithL2 extends Logging {
       val regVal = 0.5 * regParam * normWSquared
       val loss = lossSum / math.ceil(numExamples * miniBatchFraction) + regVal
 
+      localColStdevsBC.destroy()
+      localColMeansBC.destroy()
+      bcW.destroy()
+
       // total gradient = gradSum / nTrain + lambda * w
       val gradientTotal = gradientSum / math.ceil(numExamples * miniBatchFraction) + (weightsMat * regParam)
 

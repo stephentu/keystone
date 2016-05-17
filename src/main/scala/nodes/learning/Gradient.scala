@@ -133,13 +133,13 @@ trait BatchGradient extends Serializable {
 
 class LeastSquaresBatchGradient extends BatchGradient {
 
-  def sampleRows(in: DenseMatrix[Double], sampleFraction: Double) = {
-    val numRowsToKeep = math.ceil(in.rows * sampleFraction).toInt
-    val arr = (0 until in.rows).iterator
+  def sampleRows(data: DenseMatrix[Double], labels: DenseMatrix[Double], sampleFraction: Double) = {
+    val numRowsToKeep = math.ceil(data.rows * sampleFraction).toInt
+    val arr = (0 until data.rows).iterator
     // smapl
     val rowsToKeep = scala.util.Random.shuffle(arr).take(numRowsToKeep).toSeq
     // NOTE: This makes a copy ?
-    in(rowsToKeep, ::)
+    (data(rowsToKeep, ::).toDenseMatrix, labels(rowsToKeep, ::).toDenseMatrix)
   }
 
   def compute(
@@ -151,10 +151,10 @@ class LeastSquaresBatchGradient extends BatchGradient {
       miniBatchFraction: Double = 1.0)
     : (DenseMatrix[Double], Double) = {
 
-    val dataSample = if (miniBatchFraction == 1.0) {
-      data
+    val (dataSample, labelsSample) = if (miniBatchFraction == 1.0) {
+      (data, labels)
     } else {
-      sampleRows(data, miniBatchFraction).toDenseMatrix
+      sampleRows(data, labels, miniBatchFraction)
     }
 
     // Least Squares Gradient is At.(Ax - b)
@@ -164,7 +164,7 @@ class LeastSquaresBatchGradient extends BatchGradient {
     dataColStdevs.foreach { x =>
       axb(*, ::) :/= x
     }
-    axb -= labels
+    axb -= labelsSample
 
     val grad = dataSample.t * (axb)
     // Loss is 0.5 * norm(Ax - b)

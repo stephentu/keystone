@@ -60,6 +60,22 @@ case class LinearMapper[T <: Vector[Double]](
       }
     })
   }
+
+  def applyBatch(denseIn: RDD[DenseMatrix[Double]]): RDD[DenseVector[Double]] = {
+    val modelBroadcast = denseIn.context.broadcast(x)
+    val bBroadcast = denseIn.context.broadcast(bOpt)
+    val inScaled = featureScaler.map(_.applyBatch(denseIn)).getOrElse(denseIn)
+    inScaled.flatMap(rMat => {
+      val mat = rMat * modelBroadcast.value
+      val out = bBroadcast.value.map { b =>
+        mat(*, ::) :+= b
+        mat
+      }.getOrElse(mat)
+
+      MatrixUtils.matrixToRowArray(out).iterator
+    })
+  }
+
 }
 /**
  * Linear Map Estimator. Solves an OLS problem on data given labels and emits a LinearMapper transformer.

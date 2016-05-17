@@ -25,11 +25,11 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
 
 
   def testCb(testImageIds: RDD[String],
-             testFeats: RDD[DenseVector[Double]],
+             testFeats: RDD[DenseMatrix[Double]],
              testActuals: RDD[Int],
              numClasses: Int,
              lm: LinearMapper[DenseVector[Double]]): Double = {
-    val testPredictions = lm(testFeats)
+    val testPredictions = lm.applyBatch(testFeats)
     val testEval = AugmentedExamplesEvaluator(
         testImageIds, testPredictions, testActuals, numClasses)
     val testAcc = (100* testEval.totalAccuracy)
@@ -133,13 +133,14 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     trainFeats.count
 
-    val testFeats = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma).mapPartitions { itr =>
-      if (itr.hasNext) {
-        MatrixUtils.matrixToRowArray(itr.next).iterator
-      } else {
-        Iterator.empty
-      }
-    }
+    val testFeats = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
+    // .mapPartitions { itr =>
+    //   if (itr.hasNext) {
+    //     MatrixUtils.matrixToRowArray(itr.next).iterator
+    //   } else {
+    //     Iterator.empty
+    //   }
+    // }
     testFeats.count
 
     val trainLabVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
@@ -176,11 +177,25 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+    } else if (conf.solver == "cocoa") {
+      val out = new CocoaSDCAwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        regParam=conf.lambda,
+        normStd=conf.normStd,
+        numLocalItersFraction=conf.cocoaLocalItersFraction,
+        beta=conf.cocoaBeta,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeats, trainLabels)
 
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "bcd") {
       val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
       val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(trainFeatVec, trainLabVec)
-      val testPredictions = (model).apply(testFeats)
+      val testPredictions = (model).apply(testFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator))
       val testEval = AugmentedExamplesEvaluator(
          testAll.map(_._1), testPredictions, testAll.map(_._2), numClasses)
       val testAcc = (100 * testEval.totalAccuracy)
@@ -209,6 +224,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       normStd: Boolean = false,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
+      cocoaBeta: Double = 0.0,
+      cocoaLocalItersFraction: Double = 0.0,
       solver: String = "")
 
   def parse(args: Array[String]): CifarRandomFeatLBFGSConfig = new OptionParser[CifarRandomFeatLBFGSConfig](appName) {
@@ -231,6 +248,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
+    opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
+    opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, CifarRandomFeatLBFGSConfig()).get
 
@@ -245,6 +264,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     conf.setIfMissing("spark.master", "local[24]")
     conf.remove("spark.jars")
     val sc = new SparkContext(conf)
+    sc.setCheckpointDir("/tmp/spark-checkpoint")
     run(sc, appConfig)
     sc.stop()
   }

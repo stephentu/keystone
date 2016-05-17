@@ -291,6 +291,10 @@ object BatchLBFGSwithL2 extends Logging {
       val regVal = 0.5 * regParam * normWSquared
       val loss = lossSum / numExamples + regVal
 
+      localColStdevsBC.destroy()
+      localColMeansBC.destroy()
+      bcW.destroy()
+
       // total gradient = gradSum / nTrain + lambda * w
       val gradientTotal = gradientSum / numExamples.toDouble + (weightsMat * regParam)
 

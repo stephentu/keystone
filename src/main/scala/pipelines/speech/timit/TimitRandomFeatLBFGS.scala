@@ -24,12 +24,13 @@ import org.apache.spark.rdd.RDD
 object TimitRandomFeatLBFGS extends Serializable with Logging {
   val appName = "TimitRandomFeatLBFGS"
 
-  def testCb(testFeats: RDD[DenseVector[Double]],
+  def testCb(testFeats: RDD[DenseMatrix[Double]],
              testActuals: RDD[Int],
              numClasses: Int,
              lm: LinearMapper[DenseVector[Double]]): Double = {
 
-    val testPredictions = (lm andThen MaxClassifier).apply(testFeats)
+    val testPreds = lm.applyBatch(testFeats)
+    val testPredictions = MaxClassifier.apply(testPreds)
     val testEval = MulticlassClassifierEvaluator(
         testPredictions, testActuals, numClasses)
     val testAcc = (100* testEval.totalAccuracy)
@@ -112,9 +113,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     trainFeats.count
 
     //val testFeats = featurizer(test.data).cache()
-		val testFeats = randomCosineFeaturize(test.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma).mapPartitions { itr =>
-      MatrixUtils.matrixToRowArray(itr.next).iterator
-    }
+		val testFeats = randomCosineFeaturize(test.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     testFeats.count
 
     val trainLabelsVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
@@ -150,12 +149,26 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
+    } else if (conf.solver == "cocoa") {
+      val out = new CocoaSDCAwithL2(
+        new LeastSquaresBatchGradient,
+        numIterations=conf.numIters,
+        regParam=conf.lambda,
+        normStd=conf.normStd,
+        numLocalItersFraction=conf.cocoaLocalItersFraction,
+        beta=conf.cocoaBeta,
+        epochCallback=Some(testCbBound),
+        epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
+
+      val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
+      val testAcc = testCbBound(model)
+      println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "bcd") {
       val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
       val model = new BlockLeastSquaresEstimator(
         conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(
           trainFeatVec, trainLabelsVec)
-      val testPredictions = (model andThen MaxClassifier).apply(testFeats)
+        val testPredictions = (model andThen MaxClassifier).apply(testFeats.mapPartitions(itr => MatrixUtils.matrixToRowArray(itr.next).iterator))
       val testEval = MulticlassClassifierEvaluator(
           testPredictions, testLabels, numClasses)
       val testAcc = (100* testEval.totalAccuracy)
@@ -183,6 +196,8 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       normStd: Boolean = false,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
+      cocoaBeta: Double = 0.0,
+      cocoaLocalItersFraction: Double = 0.0,
       solver: String = "")
 
   def parse(args: Array[String]): TimitRandomFeatLBFGSConfig = new OptionParser[TimitRandomFeatLBFGSConfig](appName) {
@@ -206,6 +221,8 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
+    opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
+    opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, TimitRandomFeatLBFGSConfig()).get
 
@@ -220,6 +237,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     conf.setIfMissing("spark.master", "local[24]")
     conf.remove("spark.jars")
     val sc = new SparkContext(conf)
+    sc.setCheckpointDir("/tmp/spark-checkpoint")
     run(sc, appConfig)
     sc.stop()
   }
