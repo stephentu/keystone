@@ -154,11 +154,11 @@ class LeastSquaresBatchGradient extends BatchGradient {
     val dataSample = if (miniBatchFraction == 1.0) {
       data
     } else {
-      sampleRows(data, miniBatchFraction)
+      sampleRows(data, miniBatchFraction).toDenseMatrix
     }
 
     // Least Squares Gradient is At.(Ax - b)
-    val axb = (data * weights)
+    val axb: DenseMatrix[Double] = (dataSample * weights)
     val meanTerm = (dataColMeans.t * weights).t
     axb(*, ::) -= meanTerm
     dataColStdevs.foreach { x =>
@@ -166,7 +166,7 @@ class LeastSquaresBatchGradient extends BatchGradient {
     }
     axb -= labels
 
-    val grad = data.t * (axb)
+    val grad = dataSample.t * (axb)
     // Loss is 0.5 * norm(Ax - b)
     val loss = 0.5 * math.pow(norm(axb.toDenseVector), 2)
 
