@@ -130,7 +130,6 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
-        normStd=conf.normStd,
         epochCallback=Some(testCbBound),
         epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
@@ -142,7 +141,6 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
         numIterations=conf.numIters,
         stepSize=conf.stepSize,
         regParam=conf.lambda,
-        normStd=conf.normStd,
         miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
         epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
@@ -154,7 +152,6 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
-        normStd=conf.normStd,
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
         epochCallback=Some(testCbBound),
@@ -166,7 +163,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     } else if (conf.solver == "bcd") {
       val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
       val model = new BlockLeastSquaresEstimator(
-        conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(
+        conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), true).fit(
           trainFeatVec, trainLabelsVec)
         val testPredictions = (model andThen MaxClassifier).apply(testFeats.mapPartitions(itr => MatrixUtils.matrixToRowArray(itr.next).iterator))
       val testEval = MulticlassClassifierEvaluator(
@@ -193,7 +190,6 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       cosineGamma: Double = 0,
       numIters: Int = 0,
       seed: Long = 0,
-      normStd: Boolean = false,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
       cocoaBeta: Double = 0.0,
@@ -218,7 +214,6 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("numCosineFeatures") required() action { (x,c) => c.copy(numCosineFeatures=x) }
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
-    opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }

@@ -18,7 +18,7 @@ TRAIN_LABELS="/root/stephentu-keystone/timit-train-labels.sparse"
 TEST_FEATURES="s3n://timit-data/timit-test-features.csv"
 TEST_LABELS="/root/stephentu-keystone/timit-test-labels.sparse"
 
-NUM_PARTITIONS=512
+NUM_PARTITIONS=1024
 LAMBDAS=1e-6
 NUM_ITERS=200
 NUM_COSINES=202752
@@ -26,7 +26,6 @@ BLOCK_SIZE=6144
 GAMMA=0.0555
 SEED=213769821231
 SOLVER="lbfgs"
-NORM_STD="false"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 STEP_SIZE=0.1
 MINI_BATCH_FRACTION=1.0
@@ -46,8 +45,7 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --numCosineFeatures $NUM_COSINES \
   --numIters $NUM_ITERS \
   --solver $SOLVER \
-  --normStd $NORM_STD \
   --stepSize $STEP_SIZE \
   --miniBatchFraction $MINI_BATCH_FRACTION \
-  --seed $SEED 2>&1 | tee /root/logs/timit-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-normStd-$NORM_STD-logs-"$LOG_SUFFIX".log
+  --seed $SEED 2>&1 | tee /root/logs/timit-"$NUM_PARTITIONS"-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-logs-"$LOG_SUFFIX".log
 

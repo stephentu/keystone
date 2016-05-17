@@ -28,6 +28,8 @@ NORM_STD="false"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 STEP_SIZE=0.1
 MINI_BATCH_FRACTION=1.0
+COCOA_BETA=1.0
+COCOA_LOCAL_ITERS=1.0
 
 export EXECUTOR_OMP_NUM_THREADS=1
 
@@ -46,5 +48,7 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --normStd $NORM_STD \
   --stepSize $STEP_SIZE \
   --miniBatchFraction $MINI_BATCH_FRACTION \
+  --cocoaBeta $COCOA_BETA \
+  --cocoaLocalItersFraction $COCOA_LOCAL_ITERS \
   --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-normStd-$NORM_STD-logs-"$LOG_SUFFIX".log
 

@@ -55,7 +55,6 @@ class MiniBatchSGDwithL2(
     val regParam: Double = 0.0,
     val stepSize: Double = 1.0,
     val miniBatchFraction: Double = 0.1,
-    val normStd: Boolean = false,
     val epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
     val epochEveryTest: Int = 10)
   extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] {
@@ -77,13 +76,7 @@ class MiniBatchSGDwithL2(
 
 		// TODO: Do stdev division ?
     val popFeatureMean = MiniBatchSGDwithL2.computeColMean(data, numExamples, numFeatures)
-    val popStdEv = if (normStd) {
-      Some(MiniBatchSGDwithL2.computeColStdEv(data, numExamples, popFeatureMean, numFeatures))
-    } else {
-      None
-    }
-
-		val featureScaler = new StandardScalerModel(popFeatureMean, popStdEv)
+		val featureScaler = new StandardScalerModel(popFeatureMean, None)
 		val labelScaler = new StandardScalerModel(MiniBatchSGDwithL2.computeColMean(labels, numExamples, numClasses), None)
     // val featureScaler = new StandardScaler(normalizeStdDev = false).fit(data)
     // val labelScaler = new StandardScaler(normalizeStdDev = false).fit(labels)
@@ -132,33 +125,6 @@ object MiniBatchSGDwithL2 extends Logging {
     ) /= nRows.toDouble
   }
 
-	def computeColStdEv(
-	    data: RDD[DenseMatrix[Double]],
-	    nRows: Long,
-	 	  dataMean: DenseVector[Double],
-	    nCols: Int): DenseVector[Double] = {
-		val meanBC = data.context.broadcast(dataMean)
-	  // To compute the std dev, compute (x - mean)^2 for each row and add it up 
-	  // and then divide by number of rows.
-		val variance = data.aggregate(DenseVector.zeros[Double](nCols))(
-			seqOp = (a: DenseVector[Double], b: DenseMatrix[Double]) => {
-				var i = 0
-				val mean = meanBC.value
-				while (i < b.rows) {
-				  val diff = (b(i, ::).t - mean)
-					powInPlace(diff, 2.0)
-					a += diff
-					i = i + 1
-				}
-				a
-		  },
-			combOp = (a: DenseVector[Double], b: DenseVector[Double]) => a += b) 
-		variance /= (nRows.toDouble - 1.0)
-		powInPlace(variance, 0.5)
-    variance
-	}
-
-
   /**
    * Run Limited-memory BFGS (L-BFGS) in parallel.
    * Averaging the subgradients over different partitions is performed using one standard
@@ -192,7 +158,7 @@ object MiniBatchSGDwithL2 extends Logging {
     val endConversionTime = System.currentTimeMillis()
     logInfo(s"PIPELINE TIMING: Finished System Conversion And Transfer in ${endConversionTime - startConversionTime} ms")
 
-    val gradFun = new GradFun(data, featureScaler.mean, featureScaler.std, labelsMat, gradient, regParam, 
+    val gradFun = new GradFun(data, featureScaler.mean, labelsMat, gradient, regParam, 
       miniBatchFraction, numExamples, numFeatures, numClasses)
 
     println("MAX ROW NORM IS " + gradFun.maxRowNorm())
@@ -225,8 +191,9 @@ object MiniBatchSGDwithL2 extends Logging {
       // TODO: This uses sqrt(stepSize) policy, we can change this if reqd
       // val thisIterStepSize = stepSize / math.sqrt(epoch)
 
-      currentWeights = prevWeights * (1.0 - thisIterStepSize * regParam)
-      currentWeights -= thisIterStepSize * gradient 
+      // NOTE: Since we included the regularization term in the computation of
+      // gradient, we only need to do this here.
+      currentWeights = prevWeights - thisIterStepSize * gradient 
 
       println("For epoch " + epoch + " step size " + thisIterStepSize)
       println("For epoch " + epoch + " loss is " + loss)
@@ -262,7 +229,6 @@ object MiniBatchSGDwithL2 extends Logging {
   private class GradFun(
     dataMat: RDD[DenseMatrix[Double]],
 		dataColMeans: DenseVector[Double],
-    dataColStdevs: Option[DenseVector[Double]],
     labelsMat: RDD[DenseMatrix[Double]],
     gradient: BatchGradient,
     regParam: Double,
@@ -273,15 +239,11 @@ object MiniBatchSGDwithL2 extends Logging {
 
     def maxRowNorm(): Double = {
 			val localColMeansBC = dataMat.context.broadcast(dataColMeans)
-      val localColStdevsBC = dataMat.context.broadcast(dataColStdevs)
       val rowNorms = dataMat.map { x =>
         var i = 0
         var max_row_norm = 0.0
         while (i < x.rows) {
           val x_zm = x(i, ::).t - localColMeansBC.value
-          localColStdevsBC.value.foreach { v => 
-            x_zm :/= v
-          }
           max_row_norm = math.max(max_row_norm, norm(x_zm))
           i = i + 1
         }
@@ -296,12 +258,11 @@ object MiniBatchSGDwithL2 extends Logging {
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
       val bcW = dataMat.context.broadcast(weightsMat)
 			val localColMeansBC = dataMat.context.broadcast(dataColMeans)
-      val localColStdevsBC = dataMat.context.broadcast(dataColStdevs)
       val localGradient = gradient
       val localMiniBatchFraction = miniBatchFraction
 
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
-          localGradient.compute(x._1, localColMeansBC.value, localColStdevsBC.value, x._2,
+          localGradient.compute(x._1, localColMeansBC.value, x._2,
             bcW.value, localMiniBatchFraction)
         }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => { 
           a._1 += b._1
@@ -314,7 +275,6 @@ object MiniBatchSGDwithL2 extends Logging {
       val regVal = 0.5 * regParam * normWSquared
       val loss = lossSum / math.ceil(numExamples * miniBatchFraction) + regVal
 
-      localColStdevsBC.destroy()
       localColMeansBC.destroy()
       bcW.destroy()
 

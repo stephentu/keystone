@@ -133,7 +133,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     trainFeats.count
 
-    val testFeats = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
+    val testFeatsRaw = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     // .mapPartitions { itr =>
     //   if (itr.hasNext) {
     //     MatrixUtils.matrixToRowArray(itr.next).iterator
@@ -141,7 +141,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     //     Iterator.empty
     //   }
     // }
-    testFeats.count
+    testFeatsRaw.count
 
     val trainLabVec = ClassLabelIndicatorsFromIntLabels(numClasses).apply(train.labels)
     val trainLabels = trainLabVec.mapPartitions { iter =>
@@ -151,13 +151,13 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val featTime = System.nanoTime()
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
-    val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
     if (conf.solver == "lbfgs") {
+      val testFeats = testFeatsRaw
+      val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
       val out = new BatchLBFGSwithL2(
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
-        normStd=conf.normStd,
         epochCallback=Some(testCbBound),
         epochEveryTest=5).fitBatch(trainFeats, trainLabels)
 
@@ -165,12 +165,13 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "sgd") {
+      val testFeats = testFeatsRaw
+      val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
       val out = new MiniBatchSGDwithL2(
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         stepSize=conf.stepSize,
         regParam=conf.lambda,
-        normStd=conf.normStd,
         miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
         epochEveryTest=5).fitBatch(trainFeats, trainLabels)
@@ -179,11 +180,33 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "cocoa") {
+      val testFeats = if (conf.normRows) {
+        val normTest = testFeatsRaw.map { x =>
+          var i = 0
+          val out = DenseMatrix.zeros[Double](x.rows, x.cols)
+          while (i < x.rows) {
+            val in = x(i, ::)
+            val norm = max(sqrt(sum(pow(in, 2.0))), 2.2e-16)
+            out(i, ::) := in / norm
+            i = i + 1
+          }
+          out
+        }
+
+        normTest.cache()
+        normTest.count
+        testFeatsRaw.unpersist()
+        normTest
+      } else {
+        testFeatsRaw
+      }
+      val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
+    
       val out = new CocoaSDCAwithL2(
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
-        normStd=conf.normStd,
+        normRows=conf.normRows,
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
         epochCallback=Some(testCbBound),
@@ -193,8 +216,9 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "bcd") {
+      val testFeats = testFeatsRaw
       val trainFeatVec = trainFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator)
-      val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), normStd=conf.normStd, true).fit(trainFeatVec, trainLabVec)
+      val model = new BlockLeastSquaresEstimator(conf.blockSize, conf.numIters, conf.lambda, Some(conf.numCosineFeatures), true).fit(trainFeatVec, trainLabVec)
       val testPredictions = (model).apply(testFeats.flatMap(x => MatrixUtils.matrixToRowArray(x).iterator))
       val testEval = AugmentedExamplesEvaluator(
          testAll.map(_._1), testPredictions, testAll.map(_._2), numClasses)
@@ -221,7 +245,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       cosineGamma: Double = 0,
       numIters: Int = 0,
       seed: Long = 0,
-      normStd: Boolean = false,
+      normRows: Boolean = false,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
       cocoaBeta: Double = 0.0,
@@ -245,7 +269,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("numCosineFeatures") required() action { (x,c) => c.copy(numCosineFeatures=x) }
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
-    opt[Boolean]("normStd") required() action { (x,c) => c.copy(normStd=x) }
+    opt[Boolean]("normRows") required() action { (x,c) => c.copy(normRows=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }

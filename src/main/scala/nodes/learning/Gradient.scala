@@ -124,7 +124,6 @@ trait BatchGradient extends Serializable {
   def compute(
       data: DenseMatrix[Double],
       dataColMeans: DenseVector[Double],
-      dataColStdevs: Option[DenseVector[Double]],
       labels: DenseMatrix[Double],
       weights: DenseMatrix[Double],
       miniBatchFraction: Double = 1.0)
@@ -145,7 +144,6 @@ class LeastSquaresBatchGradient extends BatchGradient {
   def compute(
       data: DenseMatrix[Double],
       dataColMeans: DenseVector[Double],
-      dataColStdevs: Option[DenseVector[Double]],
       labels: DenseMatrix[Double],
       weights: DenseMatrix[Double],
       miniBatchFraction: Double = 1.0)
@@ -161,9 +159,6 @@ class LeastSquaresBatchGradient extends BatchGradient {
     val axb: DenseMatrix[Double] = (dataSample * weights)
     val meanTerm = (dataColMeans.t * weights).t
     axb(*, ::) -= meanTerm
-    dataColStdevs.foreach { x =>
-      axb(*, ::) :/= x
-    }
     axb -= labelsSample
 
     val grad = dataSample.t * (axb)

@@ -36,7 +36,7 @@ class CocoaSDCAwithL2(
     val convergenceTol: Double = 1e-4,
     val numIterations: Int = 100,
     val regParam: Double = 0.0,
-    val normStd: Boolean = false,
+    val normRows: Boolean = false,
     val numLocalItersFraction: Double = 1.0,
     val gamma: Double = 1.0,
     val beta: Double = 1.0,
@@ -61,13 +61,8 @@ class CocoaSDCAwithL2(
     val numClasses = labels.map(_.cols).collect().head
 
 		// TODO: Do stdev division ?
-    val popFeatureMean = MatrixUtils.computeColMean(data, numExamples, numFeatures)
-    val popStdEv = if (normStd) {
-      Some(MatrixUtils.computeColStdEv(data, numExamples, popFeatureMean, numFeatures))
-    } else {
-      None
-    }
-		val featureScaler = new StandardScalerModel(popFeatureMean, popStdEv)
+    val popFeatureMean = CocoaSDCAwithL2.computeColMean(data, numExamples, numFeatures, normRows)
+		val featureScaler = new StandardScalerModel(popFeatureMean, None)
 		val labelScaler = new StandardScalerModel(MatrixUtils.computeColMean(labels, numExamples, numClasses), None)
     // val featureScaler = new StandardScaler(normalizeStdDev = false).fit(data)
     // val labelScaler = new StandardScaler(normalizeStdDev = false).fit(labels)
@@ -85,6 +80,7 @@ class CocoaSDCAwithL2(
       gamma,
       beta,
       computeCost,
+      normRows,
       epochCallback,
       epochEveryTest)
 
@@ -94,6 +90,32 @@ class CocoaSDCAwithL2(
 }
 
 object CocoaSDCAwithL2 extends Logging {
+
+  def computeColMean(
+      data: RDD[DenseMatrix[Double]],
+      nRows: Long,
+      nCols: Int,
+      normRows: Boolean): DenseVector[Double] = {
+    // To compute the column means, compute the colSum in each partition, add it
+    // up and then divide by number of rows.
+    data.aggregate(DenseVector.zeros[Double](nCols))(
+			seqOp = (a: DenseVector[Double], b: DenseMatrix[Double]) => {
+        if (normRows) {
+          var i = 0
+          while (i < b.rows) {
+            val in = b(i, ::)
+            val norm = max(sqrt(sum(pow(in, 2.0))), 2.2e-16)
+            a += (in.t / norm)
+            i = i + 1
+          }
+        } else {
+  	      a += sum(b(::, *)).toDenseVector
+        }
+        a
+			},
+			combOp = (a: DenseVector[Double], b: DenseVector[Double]) => a += b
+    ) /= nRows.toDouble
+  }
 
   def runCocoa(
       data: RDD[DenseMatrix[Double]],
@@ -108,6 +130,7 @@ object CocoaSDCAwithL2 extends Logging {
       gamma: Double,
       beta: Double,
       computeCost: Boolean,
+      normRows: Boolean,
       epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
       epochEveryTest: Int = 10): DenseMatrix[Double] = {
 
@@ -150,7 +173,7 @@ object CocoaSDCAwithL2 extends Logging {
       // find updates to alpha, w
       val updates = zipData.mapPartitions(
         partitionUpdate(_, currentWeights, numLocalItersFraction, regParam, numExamples, scaling,
-          seed + epoch, plus, parts * gamma, featureScaler.mean, featureScaler.std), preservesPartitioning = true).persist()
+          seed + epoch, plus, parts * gamma, featureScaler.mean, normRows), preservesPartitioning = true).persist()
       alpha = updates.map(kv => kv._2)
       val primalUpdates = updates.map(kv => kv._1).reduce(_ + _)
       currentWeights += (primalUpdates * scaling)
@@ -225,20 +248,24 @@ object CocoaSDCAwithL2 extends Logging {
     plus: Boolean,
     sigma: Double,
     featureMeans: DenseVector[Double],
-    featureStdEv: Option[DenseVector[Double]]): Iterator[(DenseMatrix[Double], DenseMatrix[Double])] = {
+    normRows: Boolean): Iterator[(DenseMatrix[Double], DenseMatrix[Double])] = {
 
-    val zipPair = zipData.next()
-    val localFeatures = zipPair._2._1
-    val localLabels = zipPair._2._2
-    var alpha = zipPair._1
-    val alphaOld = alpha.copy
+    if (zipData.hasNext) {
+      val zipPair = zipData.next()
+      val localFeatures = zipPair._2._1
+      val localLabels = zipPair._2._2
+      var alpha = zipPair._1
+      val alphaOld = alpha.copy
 
-    val (deltaAlpha, deltaW) = localSDCA(
-      localFeatures, localLabels, wInit, localItersFraction, lambda, n, alpha,
-      alphaOld, seed, plus, sigma, featureMeans, featureStdEv)
-    alpha = alphaOld + (deltaAlpha * scaling)
+      val (deltaAlpha, deltaW) = localSDCA(
+        localFeatures, localLabels, wInit, localItersFraction, lambda, n, alpha,
+        alphaOld, seed, plus, sigma, featureMeans, normRows)
+      alpha = alphaOld + (deltaAlpha * scaling)
 
-    return Iterator.single((deltaW, alpha))
+      return Iterator.single((deltaW, alpha))
+    } else {
+      Iterator.empty
+    }
   }
 
   /**
@@ -277,7 +304,7 @@ object CocoaSDCAwithL2 extends Logging {
     plus: Boolean,
     sigma: Double,
     featureMeans: DenseVector[Double],
-    featureStdEv: Option[DenseVector[Double]]): (DenseMatrix[Double], DenseMatrix[Double]) = {
+    normRows: Boolean): (DenseMatrix[Double], DenseMatrix[Double]) = {
     
     var w = wInit
     val nLocal = localFeatures.rows
@@ -292,8 +319,16 @@ object CocoaSDCAwithL2 extends Logging {
 
       // randomly select a local example
       val idx = r.nextInt(nLocal)
-      val x = localFeatures(idx, ::).t - featureMeans
-      featureStdEv.foreach(stdev => x :/= stdev)
+      val in = localFeatures(idx, ::).t
+
+      val x = if (normRows) {
+        val norm = max(sqrt(sum(pow(in, 2.0))), 2.2e-16)
+        val xo = in / norm
+        xo -= featureMeans
+        xo
+      } else {
+        in - featureMeans
+      }
       val y = localLabels(idx, ::).t
 
       // compute hinge loss gradient
@@ -321,7 +356,9 @@ object CocoaSDCAwithL2 extends Logging {
 
       // update primal and dual variables
       val update = (x * del_alpha.t) * (1.0/lambda)
-      // println("update norm " + norm(update.toDenseVector))
+      println("update norm " + norm(update.toDenseVector))
+      println("del_alpha norm " + norm(del_alpha))
+      println("x norm " + norm(x))
       if (!plus) {
         w += update
       }

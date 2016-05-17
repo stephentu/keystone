@@ -170,8 +170,7 @@ object YelpHashLBFGS extends Serializable with Logging {
           numIterations=conf.numIters,
           regParam=conf.lambda,
           epochCallback=Some(testCbBound),
-          epochEveryTest=5,
-          normStd=false).fitBatch(trainFeatMat, trainLabMat)
+          epochEveryTest=5).fitBatch(trainFeatMat, trainLabMat)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
@@ -182,7 +181,6 @@ object YelpHashLBFGS extends Serializable with Logging {
         numIterations=conf.numIters,
         stepSize=conf.stepSize,
         regParam=conf.lambda,
-        normStd=false,
         miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
         epochEveryTest=5).fitBatch(trainFeatMat, trainLabMat)
@@ -194,7 +192,6 @@ object YelpHashLBFGS extends Serializable with Logging {
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
-        normStd=false,
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
         epochCallback=Some(testCbBound),
