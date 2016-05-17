@@ -46,14 +46,15 @@ import utils.{MatrixUtils, Stats}
  * @param gradient Gradient function to be used.
  * @param convergenceTol convergence tolerance
  * @param regParam L2 regularization
- * @param numIterations max number of iterations to run 
+ * @param numIterations max number of iterations to run
  */
 class MiniBatchSGDwithL2(
-    val gradient: BatchGradient, 
+    val gradient: BatchGradient,
     val convergenceTol: Double = 1e-4,
     val numIterations: Int = 100,
     val regParam: Double = 0.0,
     val stepSize: Double = 1.0,
+    val dampen: Option[Double] = None,
     val miniBatchFraction: Double = 0.1,
     val epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
     val epochEveryTest: Int = 10)
@@ -90,6 +91,7 @@ class MiniBatchSGDwithL2(
       convergenceTol,
       numIterations,
       stepSize,
+      dampen,
       miniBatchFraction,
       regParam,
       epochCallback,
@@ -139,6 +141,7 @@ object MiniBatchSGDwithL2 extends Logging {
       convergenceTol: Double,
       maxNumIterations: Int,
       stepSize: Double,
+      dampen: Option[Double],
       miniBatchFraction: Double,
       regParam: Double,
       epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
@@ -154,16 +157,20 @@ object MiniBatchSGDwithL2 extends Logging {
     val labelsMat = labels.map { x =>
       x(*, ::) - labelScaler.mean
     }.cache()
-    labelsMat.count 
+    labelsMat.count
     val endConversionTime = System.currentTimeMillis()
     logInfo(s"PIPELINE TIMING: Finished System Conversion And Transfer in ${endConversionTime - startConversionTime} ms")
 
-    val gradFun = new GradFun(data, featureScaler.mean, labelsMat, gradient, regParam, 
+    val gradFun = new GradFun(data, featureScaler.mean, labelsMat, gradient, regParam,
       miniBatchFraction, numExamples, numFeatures, numClasses)
 
+    println("miniBatchFraction: " + miniBatchFraction + ", dampen: " + dampen)
     println("MAX ROW NORM IS " + gradFun.maxRowNorm())
 
     val initialWeights = DenseVector.zeros[Double](numFeatures * numClasses)
+
+    val itersPerEpoch = Math.ceil(1.0 / miniBatchFraction).toInt
+    println("itersPerEpoch: " + itersPerEpoch)
 
     /**
      * NOTE: lossSum and loss is computed using the weights from the previous iteration
@@ -172,45 +179,41 @@ object MiniBatchSGDwithL2 extends Logging {
     var prevWeights = null
     var currentWeights = initialWeights
     var currentLoss = 0.0
-    var epoch = 1
+    var iter = 1
     var thisIterStepSize = stepSize
-    while (epoch <= maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
-      val epochBegin = System.nanoTime
+    while (iter <= maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
+      val iterBegin = System.nanoTime
       val (loss, gradient) = gradFun.calculate(currentWeights)
 
       lossHistory += loss
       val prevWeights = currentWeights
 
-      // Annealing
-      // Half step size, double epoch size
-      val epochIsPow2 = math.log(epoch)/math.log(2)
-      if (epochIsPow2 % 1 == 0.0) {
-        thisIterStepSize = thisIterStepSize / 2
-        println("changing step size at " + epoch + " to " + thisIterStepSize)
-      }
-      // TODO: This uses sqrt(stepSize) policy, we can change this if reqd
-      // val thisIterStepSize = stepSize / math.sqrt(epoch)
-
       // NOTE: Since we included the regularization term in the computation of
       // gradient, we only need to do this here.
-      currentWeights = prevWeights - thisIterStepSize * gradient 
+      currentWeights = prevWeights - thisIterStepSize * gradient
 
-      println("For epoch " + epoch + " step size " + thisIterStepSize)
-      println("For epoch " + epoch + " loss is " + loss)
-      println("For epoch " + epoch + " grad norm is " + norm(gradient))
-      println("For epoch " + epoch + " x norm " + norm(prevWeights))
-      println("For epoch " + epoch + " new x norm " + norm(currentWeights))
-      val epochTime = System.nanoTime - epochBegin
-      println("EPOCH_" + epoch + "_time: " + epochTime)
-      if (!epochCallback.isEmpty && epoch % epochEveryTest == 1) {
+      println("For iter " + iter + " step size " + thisIterStepSize)
+      println("For iter " + iter + " loss is " + loss)
+      println("For iter " + iter + " grad norm is " + norm(gradient))
+      println("For iter " + iter + " x norm " + norm(prevWeights))
+      println("For iter " + iter + " new x norm " + norm(currentWeights))
+      val iterTime = System.nanoTime - iterBegin
+      println("iter_" + iter + "_time: " + iterTime)
+      if (!epochCallback.isEmpty && iter % epochEveryTest == 1) {
         val weights = currentWeights.asDenseMatrix.reshape(numFeatures, numClasses)
         val lm = LinearMapper[DenseVector[Double]](weights, Some(labelScaler.mean), Some(featureScaler))
         val testAcc = epochCallback.get(lm)
-        println(s"EPOCH_${epoch}_LAMBDA_${regParam}_TEST_ACC_${testAcc}")
-        //println("For epoch " + epoch + " TEST accuracy " + epochCallback.get(lm))
+        println(s"ITER_${iter}_LAMBDA_${regParam}_TEST_ACC_${testAcc}")
+        //println("For iter " + iter + " TEST accuracy " + epochCallback.get(lm))
       }
 
-      epoch = epoch + 1
+      if ((iter % itersPerEpoch) == 0) {
+        dampen.foreach { rho =>
+          thisIterStepSize *= rho
+        }
+      }
+
+      iter = iter + 1
     }
     val finalWeights = currentWeights.asDenseMatrix.reshape(numFeatures, numClasses)
 
@@ -264,7 +267,7 @@ object MiniBatchSGDwithL2 extends Logging {
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, x._2,
             bcW.value, localMiniBatchFraction)
-        }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => { 
+        }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => {
           a._1 += b._1
           (a._1, a._2 + b._2)
         }
@@ -296,7 +299,7 @@ object MiniBatchSGDwithL2 extends Logging {
       solutionVecDiff < convergenceTol * Math.max(norm(currentWeights), 1.0)
     } else {
       false
-    } 
+    }
   }
 
 }

@@ -45,7 +45,7 @@ object MnistRandomFFT extends Serializable with Logging {
       }
     } andThen VectorCombiner() andThen NormalizeRows andThen (new Cacher[DenseVector[Double]])
 
-    val solver: LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] = 
+    val solver: LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] =
       if (conf.solver == "bcd") {
         new BlockLeastSquaresEstimator(conf.blockSize, 1, conf.lambda.getOrElse(0), computeCost=true)
       } else if (conf.solver == "lbfgs") {
@@ -53,7 +53,8 @@ object MnistRandomFFT extends Serializable with Logging {
             regParam=conf.lambda.getOrElse(0))
       } else if (conf.solver == "sgd") {
         new MiniBatchSGDwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
-            stepSize=conf.sgdStepSize, miniBatchFraction=conf.sgdMiniBatchFraction, regParam=conf.lambda.getOrElse(0))
+            stepSize=conf.sgdStepSize, dampen=conf.sgdDampen,
+            miniBatchFraction=conf.sgdMiniBatchFraction, regParam=conf.lambda.getOrElse(0))
       } else if (conf.solver == "cocoa") {
         new CocoaSDCAwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
           regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta, computeCost=false,
@@ -95,6 +96,7 @@ object MnistRandomFFT extends Serializable with Logging {
       solver: String = "bcd",
       numIters: Int = 10,
       sgdStepSize: Double = 0.1,
+      sgdDampen: Option[Double] = None,
       sgdMiniBatchFraction: Double = 1.0,
       cocoaNumLocalItersFraction: Double = 1.0,
       cocoaBeta: Double = 1.0,
@@ -109,6 +111,7 @@ object MnistRandomFFT extends Serializable with Logging {
     opt[String]("solver") action { (x,c) => c.copy(solver=x) }
     opt[Int]("numIters") action { (x,c) => c.copy(numIters=x) }
     opt[Double]("sgdStepSize") action { (x,c) => c.copy(sgdStepSize=x) }
+    opt[Double]("sgdDampen") action { (x,c) => c.copy(sgdDampen=Some(x)) }
     opt[Double]("sgdMiniBatchFraction") action { (x,c) => c.copy(sgdMiniBatchFraction=x) }
     opt[Double]("cocoaBeta") action { (x,c) => c.copy(cocoaBeta=x) }
     opt[Double]("cocoaNumLocalItersFraction") action { (x,c) => c.copy(cocoaNumLocalItersFraction=x) }
