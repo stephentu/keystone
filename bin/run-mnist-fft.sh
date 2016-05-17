@@ -6,11 +6,11 @@ SPARK_JAVA_OPTS="-Dspark.master=local[5]" KEYSTONE_MEM=4g ./bin/run-pipeline.sh 
   --testLocation ./test-mnist-dense-with-labels.data \
   --numPartitions 10 \
   --lambda 1e-6 \
-  --cocoaNumLocalItersFraction 1.0 \
+  --cocoaNumLocalItersFraction 0.5 \
   --cocoaBeta 1.0 \
   --sgdMiniBatchFraction 1.0 \
-  --sgdStepSize 600.0 \
-  --numIters 20 \
-  --solver cocoa \
-  --numFFTs 1 \
-  --blockSize 512
+  --sgdStepSize 200.0 \
+  --numIters 100 \
+  --solver sgd \
+  --numFFTs 4 \
+  --blockSize 2048
