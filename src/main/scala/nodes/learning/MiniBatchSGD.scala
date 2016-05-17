@@ -195,6 +195,8 @@ object MiniBatchSGDwithL2 extends Logging {
     val gradFun = new GradFun(data, featureScaler.mean, featureScaler.std, labelsMat, gradient, regParam, 
       miniBatchFraction, numExamples, numFeatures, numClasses)
 
+    println("MAX ROW NORM IS " + gradFun.maxRowNorm())
+
     val initialWeights = DenseVector.zeros[Double](numFeatures * numClasses)
 
     /**
@@ -269,6 +271,26 @@ object MiniBatchSGDwithL2 extends Logging {
     numFeatures: Int,
     numClasses: Int) {
 
+    def maxRowNorm(): Double = {
+			val localColMeansBC = dataMat.context.broadcast(dataColMeans)
+      val localColStdevsBC = dataMat.context.broadcast(dataColStdevs)
+      val rowNorms = dataMat.map { x =>
+        var i = 0
+        var max_row_norm = 0.0
+        while (i < x.rows) {
+          val x_zm = x(i, ::).t - localColMeansBC.value
+          localColStdevsBC.value.foreach { v => 
+            x_zm :/= v
+          }
+          max_row_norm = math.max(max_row_norm, norm(x_zm))
+          i = i + 1
+        }
+        max_row_norm
+      }
+
+      rowNorms.collect().max
+    }
+
     def calculate(weights: DenseVector[Double]): (Double, DenseVector[Double]) = {
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
@@ -290,10 +312,10 @@ object MiniBatchSGDwithL2 extends Logging {
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val normWSquared = math.pow(norm(weights), 2)
       val regVal = 0.5 * regParam * normWSquared
-      val loss = lossSum / numExamples + regVal
+      val loss = lossSum / math.ceil(numExamples * miniBatchFraction) + regVal
 
       // total gradient = gradSum / nTrain + lambda * w
-      val gradientTotal = gradientSum / numExamples.toDouble + (weightsMat * regParam)
+      val gradientTotal = gradientSum / math.ceil(numExamples * miniBatchFraction) + (weightsMat * regParam)
 
       (loss, gradientTotal.toDenseVector)
     }
