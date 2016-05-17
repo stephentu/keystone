@@ -56,7 +56,7 @@ object MnistRandomFFT extends Serializable with Logging {
             stepSize=conf.sgdStepSize, miniBatchFraction=conf.sgdMiniBatchFraction, regParam=conf.lambda.getOrElse(0))
       } else if (conf.solver == "cocoa") {
         new CocoaSDCAwithL2(new LeastSquaresBatchGradient, numIterations=conf.numIters,
-          regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta, computeCost=true,
+          regParam=conf.lambda.getOrElse(0), beta=conf.cocoaBeta, computeCost=false,
           numLocalItersFraction=conf.cocoaNumLocalItersFraction)
       } else {
         new BlockLeastSquaresEstimator(conf.blockSize, 1, conf.lambda.getOrElse(0), computeCost=true)
