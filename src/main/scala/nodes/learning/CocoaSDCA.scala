@@ -175,7 +175,7 @@ object CocoaSDCAwithL2 extends Logging {
         partitionUpdate(_, currentWeights, numLocalItersFraction, regParam, numExamples, scaling,
           seed + epoch, plus, parts * gamma, featureScaler.mean, normRows), preservesPartitioning = true).persist()
       alpha = updates.map(kv => kv._2)
-      val primalUpdates = updates.map(kv => kv._1).reduce(_ + _)
+      val primalUpdates = updates.map(kv => kv._1).treeReduce(_ + _)
       currentWeights += (primalUpdates * scaling)
 
       // optionally checkpoint RDDs
@@ -331,34 +331,29 @@ object CocoaSDCAwithL2 extends Logging {
       }
       val y = localLabels(idx, ::).t
 
-      // compute hinge loss gradient
-      // val grad = {
-      //   if (plus) {
-      //     (y * (x.dot(w) + (sigma * x.dot(deltaW))) - 1.0) * (lambda * n)
-      //   } else {
-      //     (y * (x.dot(w)) - 1.0) * (lambda * n)
-      //   }
-      // }
-      // // compute projected gradient
-      // var proj_grad = grad
-      // if (alpha(idx) <= 0.0)
-      //   proj_grad = Math.min(grad, 0)
-      // else if (alpha(idx) >= 1.0)
-      //   proj_grad = Math.max(grad, 0)
-
       // compute square loss gradient
+
+      // OUR GRADIENT
+      // val del_alpha = if (!plus) {
+      //   (y - w.t * x - nD * alpha(idx, ::).t) / (nD + math.pow(norm(x), 2)/lambda)
+      // } else {
+      //   (y - (w.t * x) * sigma - nD * alpha(idx, ::).t) / (nD + (math.pow(norm(x), 2) * sigma) / lambda)
+      // }
+
+      // PAPER GRADIENT
       val del_alpha = if (!plus) {
-        (y - w.t * x - nD * alpha(idx, ::).t) / (nD + norm(x)/lambda)
+        (y - w.t * x - 0.5 * alpha(idx, ::).t) / (0.5 + math.pow(norm(x),2) / (nD * lambda))
       } else {
-        (y - (w.t * x) * sigma - nD * alpha(idx, ::).t) / (nD + (norm(x) * sigma) / lambda)
+        throw new RuntimeException("Not implemented")
       }
+
       val newAlpha = alpha(idx, ::) + del_alpha.t
 
       // update primal and dual variables
       val update = (x * del_alpha.t) * (1.0/lambda)
-      println("update norm " + norm(update.toDenseVector))
-      println("del_alpha norm " + norm(del_alpha))
-      println("x norm " + norm(x))
+      // println("update norm " + norm(update.toDenseVector))
+      // println("del_alpha norm " + norm(del_alpha))
+      // println("x norm " + norm(x))
       if (!plus) {
         w += update
       }
