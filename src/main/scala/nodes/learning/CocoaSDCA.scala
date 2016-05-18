@@ -5,6 +5,9 @@ import org.apache.spark.storage.StorageLevel
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+import com.github.fommil.netlib.BLAS.{getInstance=>blas}
+import com.github.fommil.netlib.LAPACK.{getInstance=>lapack}
+
 import breeze.linalg._
 import breeze.numerics._
 import breeze.math._
@@ -148,20 +151,22 @@ object CocoaSDCAwithL2 extends Logging {
 
     val labelsMat = labels.map { x =>
 			x(*, ::) - labelScaler.mean
-		}.cache()
+		}.setName("labelsMat").cache()
 		labelsMat.count	
     val endConversionTime = System.currentTimeMillis()
     logInfo(s"PIPELINE TIMING: Finished System Conversion And Transfer in ${endConversionTime - startConversionTime} ms")
 
     val dataAndLabels = data.zip(labelsMat)
 
-    var alpha = labels.map(x => DenseMatrix.zeros[Double](x.rows, x.cols)).cache()
+    var alpha = labels.map(x => DenseMatrix.zeros[Double](x.rows, x.cols)).setName("alpha").cache()
     val scaling = if (plus) gamma else beta/parts
     println("Scaling is " + scaling)
 
     val initialWeights = DenseMatrix.zeros[Double](numFeatures, numClasses)
     var prevWeights = null
     var currentWeights = initialWeights
+
+    var oldUpdates: Option[RDD[_]] = None
 
     var epoch = 0
     while (epoch < maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
@@ -173,10 +178,15 @@ object CocoaSDCAwithL2 extends Logging {
       // find updates to alpha, w
       val updates = zipData.mapPartitions(
         partitionUpdate(_, currentWeights, numLocalItersFraction, regParam, numExamples, scaling,
-          seed + epoch, plus, parts * gamma, featureScaler.mean, normRows), preservesPartitioning = true).persist()
+          seed + epoch, plus, parts * gamma, featureScaler.mean, normRows), preservesPartitioning = true).setName("updates").cache()
+
       alpha = updates.map(kv => kv._2)
       val primalUpdates = updates.map(kv => kv._1).treeReduce(_ + _)
       currentWeights += (primalUpdates * scaling)
+
+      updates.count()
+      oldUpdates.foreach(x => x.unpersist(true))
+      oldUpdates = Some(updates)
 
       // optionally checkpoint RDDs
       if(!data.context.getCheckpointDir.isEmpty && epoch % chkptIter == 0) {
@@ -194,7 +204,7 @@ object CocoaSDCAwithL2 extends Logging {
         println("For epoch " + epoch + " cost " + cost)
       }
       println("EPOCH_" + epoch + "_time: " + epochTime)
-      if (!epochCallback.isEmpty && epoch % epochEveryTest == 1) {
+      if (!epochCallback.isEmpty && (epochEveryTest == 1 || epoch % epochEveryTest == 1) ) {
         val lm = LinearMapper[DenseVector[Double]](currentWeights, Some(labelScaler.mean), Some(featureScaler))
         val testAcc = epochCallback.get(lm)
         println(s"EPOCH_${epoch}_LAMBDA_${regParam}_TEST_ACC_${testAcc}")
@@ -306,17 +316,22 @@ object CocoaSDCAwithL2 extends Logging {
     featureMeans: DenseVector[Double],
     normRows: Boolean): (DenseMatrix[Double], DenseMatrix[Double]) = {
     
-    var w = wInit
+    var w = wInit.copy
+
     val nLocal = localFeatures.rows
     val nD = n.toDouble
     var r = new scala.util.Random(seed)
-    var deltaW = DenseMatrix.zeros[Double](wInit.rows, wInit.cols)
-
     val localIters = math.ceil(nLocal * localItersFraction).toInt
+
+    //var deltaW = DenseMatrix.zeros[Double](wInit.rows, wInit.cols)
+    //val update = DenseMatrix.zeros[Double](wInit.rows, wInit.cols)
+
+    var time = 0.0
+    var dger_time = 0.0
 
     // perform local udpates
     for (i <- 1 to localIters) {
-
+      val begin = System.nanoTime()
       // randomly select a local example
       val idx = r.nextInt(nLocal)
       val in = localFeatures(idx, ::).t
@@ -341,26 +356,49 @@ object CocoaSDCAwithL2 extends Logging {
       // }
 
       // PAPER GRADIENT
+      // assert(!plus)
+      // val del_alpha = w.t * x 
+      // del_alpha *= -1.0
+      // del_alpha += y
+      // del_alpha -= (0.5 * alpha(idx, ::).t)
+      // del_alpha /= (0.5 + math.pow(norm(x),2) / (nD * lambda))
+
       val del_alpha = if (!plus) {
         (y - w.t * x - 0.5 * alpha(idx, ::).t) / (0.5 + math.pow(norm(x),2) / (nD * lambda))
       } else {
-        throw new RuntimeException("Not implemented")
+        throw new RuntimeException("not implemented")
       }
 
-      val newAlpha = alpha(idx, ::) + del_alpha.t
+      // val newAlpha = alpha(idx, ::) + del_alpha.t
 
       // update primal and dual variables
-      val update = (x * del_alpha.t) * (1.0/lambda)
+
+      // NOTE: This step creates a new matrix of the size of the model for each example
+      // So instead use blas.dger which computes outer products more efficiently ?
+      val beforeDGER = System.nanoTime() 
+      blas.dger(w.rows, w.cols, 1.0/lambda, x.toArray, 1, del_alpha.toArray, 1,
+          w.data, w.majorStride)
+
+      // val update = (x * del_alpha.t)
+      // update := 0.0
+      // update *= (1.0/lambda)
       // println("update norm " + norm(update.toDenseVector))
       // println("del_alpha norm " + norm(del_alpha))
       // println("x norm " + norm(x))
-      if (!plus) {
-        w += update
+      // if (!plus) {
+      //  w += update
+      //}
+      alpha(idx, ::) += del_alpha.t // := newAlpha
+
+      val end = System.nanoTime()
+      dger_time += ((end - beforeDGER)/1e6)
+      time += ((end - begin)/1e6)
+      if (i % 10 == 1) {
+        println("Avg. Time taken for " + i + " examples " + (time/i) + " dger " + (dger_time/i))
       }
-      deltaW += update
-      alpha(idx, ::) := newAlpha
     }
 
+    val deltaW = w - wInit
     val deltaAlpha = alpha - alphaOld
 
     return (deltaAlpha, deltaW)
