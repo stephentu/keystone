@@ -57,20 +57,25 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       numOutputFeatures: Int,
       gamma: Double): RDD[DenseMatrix[Double]] = {
     val featuresOut = data.mapPartitions { part =>
-      val random = new java.util.Random(seed)
-      val randomSource = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(random.nextLong())))
-      val wDist = randomSource.gaussian
-      val bDist = randomSource.uniform
-      val W = DenseMatrix.rand(numOutputFeatures, numInputFeatures, wDist) :* gamma
-      val b = DenseVector.rand(numOutputFeatures, bDist) :* ((2*math.Pi))
+      if (part.hasNext) {
+        val random = new java.util.Random(seed)
+        val randomSource = new RandBasis(new ThreadLocalRandomGenerator(new MersenneTwister(random.nextLong())))
+        val wDist = randomSource.gaussian
+        val bDist = randomSource.uniform
+        val W = DenseMatrix.rand(numOutputFeatures, numInputFeatures, wDist) :* gamma
+        val b = DenseVector.rand(numOutputFeatures, bDist) :* ((2*math.Pi))
 
-      val dataPart = MatrixUtils.rowsToMatrix(part)
-      val features = dataPart * W.t
-      features(*, ::) :+= b
-      cos.inPlace(features)
-      Iterator.single(features)
+        val dataPart = MatrixUtils.rowsToMatrix(part)
+        val features = dataPart * W.t
+        features(*, ::) :+= b
+        cos.inPlace(features)
+        Iterator.single(features)
+      } else {
+        Iterator.empty
+      }
       // MatrixUtils.matrixToRowArray(features).iterator
     }
+    featuresOut.setName("featuresOut")
     featuresOut.cache()
     featuresOut
   }
@@ -97,18 +102,23 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     val trainData = timitFeaturesData.train.data.cache().setName("trainRaw")
     trainData.count()
     val trainLabels = timitFeaturesData.train.labels.cache().setName("trainLabels")
-    val train = LabeledData(trainLabels.zip(trainData))
+    val train = LabeledData(trainLabels.zip(trainData).repartition(conf.trainParts).cache().setName("trainRepart"))
+
+    train.data.count
+    train.labels.count
    
     val testData = timitFeaturesData.test.data.cache().setName("testRaw")
     val numTest = testData.count()
     val testLabels = timitFeaturesData.test.labels.cache().setName("testLabels")
     val test = LabeledData(testLabels.zip(testData))
 
+    test.data.count
+    test.labels.count
+
     val numInputFeats = train.data.first.size
     val numBlocks = math.ceil(conf.numCosineFeatures.toDouble / conf.blockSize.toDouble).toInt
 
 		val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
-
     // val trainFeats = featurizer(train.data).cache()
     trainFeats.count
 
@@ -154,8 +164,9 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
         regParam=conf.lambda,
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
+        normRows=false,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
+        epochEveryTest=1).fitBatch(trainFeats, trainLabelsMat)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
