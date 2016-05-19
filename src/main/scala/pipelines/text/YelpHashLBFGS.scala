@@ -180,10 +180,11 @@ object YelpHashLBFGS extends Serializable with Logging {
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         stepSize=conf.stepSize,
+        dampen=conf.sgdDampen,
         regParam=conf.lambda,
         miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeatMat, trainLabMat)
+        epochEveryTest=1).fitBatch(trainFeatMat, trainLabMat)
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_RMSE_${testAcc}")
@@ -233,6 +234,7 @@ object YelpHashLBFGS extends Serializable with Logging {
       cocoaBeta: Double = 0.0,
       cocoaLocalItersFraction: Double = 0.0,
       seed: Long = 0,
+      sgdDampen: Option[Double] = None,
       solver: String = "")
 
   def parse(args: Array[String]): YelpHashLBFGSConfig = new OptionParser[YelpHashLBFGSConfig](appName) {
@@ -253,6 +255,7 @@ object YelpHashLBFGS extends Serializable with Logging {
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Double]("lambda") required() action { (x,c) => c.copy(lambda=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
+    opt[Double]("sgdDampen") action { (x,c) => c.copy(sgdDampen=Some(x)) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
     opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }

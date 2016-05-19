@@ -199,7 +199,7 @@ object MiniBatchSGDwithL2 extends Logging {
       println("For iter " + iter + " new x norm " + norm(currentWeights))
       val iterTime = System.nanoTime - iterBegin
       println("iter_" + iter + "_time: " + iterTime)
-      if (!epochCallback.isEmpty && iter % epochEveryTest == 1) {
+      if (!epochCallback.isEmpty && (epochEveryTest == 1 || iter % epochEveryTest == 1)) {
         val weights = currentWeights.asDenseMatrix.reshape(numFeatures, numClasses)
         val lm = LinearMapper[DenseVector[Double]](weights, Some(labelScaler.mean), Some(featureScaler))
         val testAcc = epochCallback.get(lm)
