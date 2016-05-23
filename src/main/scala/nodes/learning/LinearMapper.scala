@@ -5,6 +5,7 @@ import edu.berkeley.cs.amplab.mlmatrix.{NormalEquations, RowPartitionedMatrix}
 import nodes.stats.{StandardScaler, StandardScalerModel}
 import nodes.util.Densify
 import org.apache.spark.rdd.RDD
+import org.apache.spark.broadcast.Broadcast
 import utils.MatrixUtils
 import workflow.{LabelEstimator, Transformer}
 
@@ -61,9 +62,11 @@ case class LinearMapper[T <: Vector[Double]](
     })
   }
 
-  def applyBatch(denseIn: RDD[DenseMatrix[Double]]): RDD[DenseVector[Double]] = {
-    val modelBroadcast = denseIn.context.broadcast(x)
-    val bBroadcast = denseIn.context.broadcast(bOpt)
+  def applyBatch(denseIn: RDD[DenseMatrix[Double]], 
+      modelBroadcastIn: Option[Broadcast[DenseMatrix[Double]]] = None,
+      bBroadcastIn: Option[Broadcast[Option[DenseVector[Double]]]] = None): RDD[DenseVector[Double]] = {
+    val modelBroadcast = modelBroadcastIn.getOrElse(denseIn.context.broadcast(x))
+    val bBroadcast = bBroadcastIn.getOrElse(denseIn.context.broadcast(bOpt))
     val inScaled = featureScaler.map(_.applyBatch(denseIn)).getOrElse(denseIn)
     inScaled.flatMap(rMat => {
       val mat = rMat * modelBroadcast.value
