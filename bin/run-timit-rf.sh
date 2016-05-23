@@ -20,7 +20,7 @@ TEST_LABELS="/root/stephentu-keystone/timit-test-labels.sparse"
 
 NUM_PARTITIONS=1024
 LAMBDAS=1e-6
-NUM_ITERS=200
+NUM_ITERS=60
 NUM_COSINES=202752
 BLOCK_SIZE=6144
 GAMMA=0.0555
@@ -29,6 +29,8 @@ SOLVER="lbfgs"
 LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 STEP_SIZE=0.1
 MINI_BATCH_FRACTION=1.0
+COCOA_BETA=1.0
+COCOA_LOCAL_ITERS=0.1
 
 export EXECUTOR_OMP_NUM_THREADS=1
 
@@ -46,6 +48,8 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --numIters $NUM_ITERS \
   --solver $SOLVER \
   --stepSize $STEP_SIZE \
+  --cocoaBeta $COCOA_BETA \
+  --cocoaLocalItersFraction $COCOA_LOCAL_ITERS \
   --miniBatchFraction $MINI_BATCH_FRACTION \
   --seed $SEED 2>&1 | tee /root/logs/timit-"$NUM_PARTITIONS"-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-logs-"$LOG_SUFFIX".log
 
