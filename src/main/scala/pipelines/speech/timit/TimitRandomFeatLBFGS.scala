@@ -28,12 +28,17 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
              testActuals: RDD[Int],
              numClasses: Int,
              lm: LinearMapper[DenseVector[Double]]): Double = {
-
-    val testPreds = lm.applyBatch(testFeats)
+    val modelBC = testActuals.context.broadcast(lm.x)
+    val interceptBC = testActuals.context.broadcast(lm.bOpt)
+    val testPreds = lm.applyBatch(testFeats, Some(modelBC), Some(interceptBC))
     val testPredictions = MaxClassifier.apply(testPreds)
     val testEval = MulticlassClassifierEvaluator(
         testPredictions, testActuals, numClasses)
     val testAcc = (100* testEval.totalAccuracy)
+
+    modelBC.unpersist()
+    interceptBC.unpersist()
+
     testAcc
   }
 
@@ -141,7 +146,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
         numIterations=conf.numIters,
         regParam=conf.lambda,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
+        epochEveryTest=1).fitBatch(trainFeats, trainLabelsMat)
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")

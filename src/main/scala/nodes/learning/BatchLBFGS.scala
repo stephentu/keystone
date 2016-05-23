@@ -200,7 +200,7 @@ object BatchLBFGSwithL2 extends Logging {
       println("For epoch " + epoch + " x norm " + norm(state.x))
       val epochTime = System.nanoTime - epochBegin
       println("EPOCH_" + epoch + "_time: " + epochTime)
-      if (!epochCallback.isEmpty && epoch % epochEveryTest == 1) {
+      if (!epochCallback.isEmpty && (epochEveryTest == 1 || epoch % epochEveryTest == 1)) {
         val weights = state.x.asDenseMatrix.reshape(numFeatures, numClasses)
         val lm = LinearMapper[DenseVector[Double]](weights, Some(labelScaler.mean), Some(featureScaler))
         val testAcc = epochCallback.get(lm)

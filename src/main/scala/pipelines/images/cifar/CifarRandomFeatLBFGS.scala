@@ -159,7 +159,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
         numIterations=conf.numIters,
         regParam=conf.lambda,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeats, trainLabels)
+        epochEveryTest=1).fitBatch(trainFeats, trainLabels)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
@@ -210,7 +210,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeats, trainLabels)
+        epochEveryTest=1).fitBatch(trainFeats, trainLabels)
 
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
