@@ -166,8 +166,6 @@ object CocoaSDCAwithL2 extends Logging {
     var prevWeights = null
     var currentWeights = initialWeights
 
-    var oldUpdates: Option[RDD[_]] = None
-
     var epoch = 0
     while (epoch < maxNumIterations && !isConverged(prevWeights, currentWeights, convergenceTol)) {
       val epochBegin = System.nanoTime
@@ -180,13 +178,15 @@ object CocoaSDCAwithL2 extends Logging {
         partitionUpdate(_, currentWeights, numLocalItersFraction, regParam, numExamples, scaling,
           seed + epoch, plus, parts * gamma, featureScaler.mean, normRows), preservesPartitioning = true).setName("updates").cache()
 
-      alpha = updates.map(kv => kv._2)
+      val newAlpha = updates.map(kv => kv._2).setName("alpha").cache()
       val primalUpdates = updates.map(kv => kv._1).treeReduce(_ + _)
       currentWeights += (primalUpdates * scaling)
 
-      updates.count()
-      oldUpdates.foreach(x => x.unpersist(true))
-      oldUpdates = Some(updates)
+      newAlpha.count()
+      alpha.unpersist(true)
+      alpha = newAlpha
+
+      updates.unpersist(true)
 
       // optionally checkpoint RDDs
       if(!data.context.getCheckpointDir.isEmpty && epoch % chkptIter == 0) {
