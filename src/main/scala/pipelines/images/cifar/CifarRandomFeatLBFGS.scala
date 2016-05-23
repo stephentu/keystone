@@ -171,6 +171,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         stepSize=conf.stepSize,
+        dampen=conf.sgdDampen,
         regParam=conf.lambda,
         miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
@@ -180,33 +181,14 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
     } else if (conf.solver == "cocoa") {
-      val testFeats = if (conf.normRows) {
-        val normTest = testFeatsRaw.map { x =>
-          var i = 0
-          val out = DenseMatrix.zeros[Double](x.rows, x.cols)
-          while (i < x.rows) {
-            val in = x(i, ::)
-            val norm = max(sqrt(sum(pow(in, 2.0))), 2.2e-16)
-            out(i, ::) := in / norm
-            i = i + 1
-          }
-          out
-        }
-
-        normTest.cache()
-        normTest.count
-        testFeatsRaw.unpersist()
-        normTest
-      } else {
-        testFeatsRaw
-      }
+      val testFeats = testFeatsRaw
       val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
     
       val out = new CocoaSDCAwithL2(
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         regParam=conf.lambda,
-        normRows=conf.normRows,
+        normRows=false,
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
         epochCallback=Some(testCbBound),
@@ -245,7 +227,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       cosineGamma: Double = 0,
       numIters: Int = 0,
       seed: Long = 0,
-      normRows: Boolean = false,
+      sgdDampen: Option[Double] = None,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
       cocoaBeta: Double = 0.0,
@@ -269,8 +251,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("numCosineFeatures") required() action { (x,c) => c.copy(numCosineFeatures=x) }
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
-    opt[Boolean]("normRows") required() action { (x,c) => c.copy(normRows=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
+    opt[Double]("sgdDampen") action { (x,c) => c.copy(sgdDampen=Some(x)) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
     opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }

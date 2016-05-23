@@ -155,10 +155,11 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
         new LeastSquaresBatchGradient,
         numIterations=conf.numIters,
         stepSize=conf.stepSize,
+        dampen=conf.sgdDampen,
         regParam=conf.lambda,
         miniBatchFraction=conf.miniBatchFraction,
         epochCallback=Some(testCbBound),
-        epochEveryTest=5).fitBatch(trainFeats, trainLabelsMat)
+        epochEveryTest=1).fitBatch(trainFeats, trainLabelsMat)
       val model = LinearMapper[DenseVector[Double]](out._1, out._2, out._3)
       val testAcc = testCbBound(model)
       println(s"LAMBDA_${conf.lambda}_TEST_ACC_${testAcc}")
@@ -206,6 +207,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
       cosineGamma: Double = 0,
       numIters: Int = 0,
       seed: Long = 0,
+      sgdDampen: Option[Double] = None,
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
       cocoaBeta: Double = 0.0,
@@ -231,6 +233,7 @@ object TimitRandomFeatLBFGS extends Serializable with Logging {
     opt[Int]("blockSize") required() action { (x,c) => c.copy(blockSize=x) }
     opt[Int]("numIters") required() action { (x,c) => c.copy(numIters=x) }
     opt[Double]("stepSize") required() action { (x,c) => c.copy(stepSize=x) }
+    opt[Double]("sgdDampen") action { (x,c) => c.copy(sgdDampen=Some(x)) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
     opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }
