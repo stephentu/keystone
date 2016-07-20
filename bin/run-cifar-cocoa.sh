@@ -29,6 +29,8 @@ LOG_SUFFIX=`date +"%Y_%m_%d_%H_%M_%S"`
 STEP_SIZE=3e-2
 MINI_BATCH_FRACTION=1.0
 COCOA_BETA=1.0
+COCOA_GAMMA=3e-3
+COCOA_PLUS="true"
 COCOA_LOCAL_ITERS=1.0
 NORM_ROWS="false"
 
@@ -46,10 +48,11 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --numCosineFeatures $NUM_COSINES \
   --numIters $NUM_ITERS \
   --solver $SOLVER \
-  --normRows $NORM_ROWS \
   --stepSize $STEP_SIZE \
   --cocoaBeta $COCOA_BETA \
+  --cocoaGamma $COCOA_GAMMA \
+  --cocoaPlus $COCOA_PLUS \
   --cocoaLocalItersFraction $COCOA_LOCAL_ITERS \
   --miniBatchFraction $MINI_BATCH_FRACTION \
-  --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-step-$STEP_SIZE-mini-$MINI_BATCH_FRACTION-normRows-$NORM_ROWS-logs-"$LOG_SUFFIX".log
+  --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-step-$STEP_SIZE-mini-$MINI_BATCH_FRACTION-normRows-$NORM_ROWS-cocoaPlus-$COCOA_PLUS-logs-"$LOG_SUFFIX".log
 

@@ -191,6 +191,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
         normRows=false,
         numLocalItersFraction=conf.cocoaLocalItersFraction,
         beta=conf.cocoaBeta,
+        gamma=conf.cocoaGamma,
+        plus=conf.cocoaPlus,
         epochCallback=Some(testCbBound),
         epochEveryTest=1).fitBatch(trainFeats, trainLabels)
 
@@ -231,6 +233,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
       stepSize: Double = 0.0,
       miniBatchFraction: Double = 0.0,
       cocoaBeta: Double = 0.0,
+      cocoaGamma: Double = 0.0,
+      cocoaPlus: Boolean = false,
       cocoaLocalItersFraction: Double = 0.0,
       solver: String = "")
 
@@ -255,6 +259,8 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     opt[Double]("sgdDampen") action { (x,c) => c.copy(sgdDampen=Some(x)) }
     opt[Double]("miniBatchFraction") required() action { (x,c) => c.copy(miniBatchFraction=x) }
     opt[Double]("cocoaBeta") required() action { (x,c) => c.copy(cocoaBeta=x) }
+    opt[Double]("cocoaGamma") required() action { (x,c) => c.copy(cocoaGamma=x) }
+    opt[Boolean]("cocoaPlus") required() action { (x,c) => c.copy(cocoaPlus=x) }
     opt[Double]("cocoaLocalItersFraction") required() action { (x,c) => c.copy(cocoaLocalItersFraction=x) }
     opt[String]("solver") required() action { (x,c) => c.copy(solver=x) }
   }.parse(args, CifarRandomFeatLBFGSConfig()).get
