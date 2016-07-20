@@ -44,6 +44,7 @@ class CocoaSDCAwithL2(
     val gamma: Double = 1.0,
     val beta: Double = 1.0,
     val computeCost: Boolean = false,
+    val plus: Boolean = false,
     val epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
     val epochEveryTest: Int = 10)
   extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] {
@@ -84,6 +85,7 @@ class CocoaSDCAwithL2(
       beta,
       computeCost,
       normRows,
+      plus,
       epochCallback,
       epochEveryTest)
 
@@ -134,11 +136,11 @@ object CocoaSDCAwithL2 extends Logging {
       beta: Double,
       computeCost: Boolean,
       normRows: Boolean,
+      plus: Boolean = false,
       epochCallback: Option[LinearMapper[DenseVector[Double]] => Double] = None,
       epochEveryTest: Int = 10): DenseMatrix[Double] = {
 
     // TODO: Add this as a parameter ?!
-    val plus = false
     val chkptIter = 20
     val seed = 12654764
 
@@ -160,7 +162,8 @@ object CocoaSDCAwithL2 extends Logging {
 
     var alpha = labels.map(x => DenseMatrix.zeros[Double](x.rows, x.cols)).setName("alpha").cache()
     val scaling = if (plus) gamma else beta/parts
-    println("Scaling is " + scaling)
+    val sigma = parts * gamma
+    println("Scaling is " + scaling + ", sigma is " + sigma)
 
     val initialWeights = DenseMatrix.zeros[Double](numFeatures, numClasses)
     var prevWeights = null
@@ -176,7 +179,7 @@ object CocoaSDCAwithL2 extends Logging {
       // find updates to alpha, w
       val updates = zipData.mapPartitions(
         partitionUpdate(_, currentWeights, numLocalItersFraction, regParam, numExamples, scaling,
-          seed + epoch, plus, parts * gamma, featureScaler.mean, normRows), preservesPartitioning = true).setName("updates").cache()
+          seed + epoch, plus, sigma, featureScaler.mean, normRows), preservesPartitioning = true).setName("updates").cache()
 
       val newAlpha = updates.map(kv => kv._2).setName("alpha").cache()
       val primalUpdates = updates.map(kv => kv._1).treeReduce(_ + _)
@@ -316,7 +319,12 @@ object CocoaSDCAwithL2 extends Logging {
     featureMeans: DenseVector[Double],
     normRows: Boolean): (DenseMatrix[Double], DenseMatrix[Double]) = {
     
-    var w = wInit.copy
+    var w = if (!plus) {
+      wInit.copy
+    } else {
+      DenseMatrix.zeros[Double](wInit.rows, wInit.cols)
+    }
+
 
     val nLocal = localFeatures.rows
     val nD = n.toDouble
@@ -348,14 +356,7 @@ object CocoaSDCAwithL2 extends Logging {
 
       // compute square loss gradient
 
-      // OUR GRADIENT
-      // val del_alpha = if (!plus) {
-      //   (y - w.t * x - nD * alpha(idx, ::).t) / (nD + math.pow(norm(x), 2)/lambda)
-      // } else {
-      //   (y - (w.t * x) * sigma - nD * alpha(idx, ::).t) / (nD + (math.pow(norm(x), 2) * sigma) / lambda)
-      // }
-
-      // PAPER GRADIENT
+      // SDCA PAPER GRADIENT
       // assert(!plus)
       // val del_alpha = w.t * x 
       // del_alpha *= -1.0
@@ -366,7 +367,8 @@ object CocoaSDCAwithL2 extends Logging {
       val del_alpha = if (!plus) {
         (y - w.t * x - 0.5 * alpha(idx, ::).t) / (0.5 + math.pow(norm(x),2) / (nD * lambda))
       } else {
-        throw new RuntimeException("not implemented")
+       (y - (wInit.t * x + sigma * (w.t * x)) - 0.5 * alpha(idx, ::).t) /
+          (0.5 + (sigma * math.pow(norm(x), 2)) / (nD * lambda))  
       }
 
       // val newAlpha = alpha(idx, ::) + del_alpha.t
@@ -375,6 +377,7 @@ object CocoaSDCAwithL2 extends Logging {
 
       // NOTE: This step creates a new matrix of the size of the model for each example
       // So instead use blas.dger which computes outer products more efficiently ?
+      // This computes w = w + (x * del_alpha.t)/lambda
       val beforeDGER = System.nanoTime() 
       blas.dger(w.rows, w.cols, 1.0/lambda, x.toArray, 1, del_alpha.toArray, 1,
           w.data, w.majorStride)
@@ -393,13 +396,20 @@ object CocoaSDCAwithL2 extends Logging {
       val end = System.nanoTime()
       dger_time += ((end - beforeDGER)/1e6)
       time += ((end - begin)/1e6)
-      if (i % 10 == 1) {
-        println("Avg. Time taken for " + i + " examples " + (time/i) + " dger " + (dger_time/i))
-      }
+      //if (i % 100 == 1) {
+      //  println("Avg. Time taken for " + i + " examples " + (time/i) + " dger " + (dger_time/i))
+      //}
     }
 
-    val deltaW = w - wInit
+    val deltaW = if (plus) {
+      w 
+    } else {
+      w - wInit
+    }
     val deltaAlpha = alpha - alphaOld
+
+    //println("norm of deltaW is " + norm(deltaW.toDenseVector))
+    //println("norm of deltaAlpha is " + norm(deltaAlpha.toDenseVector))
 
     return (deltaAlpha, deltaW)
   }
