@@ -41,7 +41,6 @@ import utils.{MatrixUtils, Stats}
 /**
  * :: DeveloperApi ::
  * Class used to solve an optimization problem using Mini-batch SGD.
- * Reference: [[http://en.wikipedia.org/wiki/Limited-memory_BFGS]]
  *
  * @param gradient Gradient function to be used.
  * @param convergenceTol convergence tolerance
@@ -128,9 +127,7 @@ object MiniBatchSGDwithL2 extends Logging {
   }
 
   /**
-   * Run Limited-memory BFGS (L-BFGS) in parallel.
-   * Averaging the subgradients over different partitions is performed using one standard
-   * spark map-reduce in each iteration.
+   * Run Stochastic Gradient Descent in parallel.
    */
   def runSGD(
       data: RDD[DenseMatrix[Double]],
