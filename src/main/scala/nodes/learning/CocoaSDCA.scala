@@ -285,11 +285,10 @@ object CocoaSDCAwithL2 extends Logging {
    * This is an implementation of LocalDualMethod, here LocalSDCA (coordinate ascent),
    * with taking the information of the other workers into account, by respecting the
    * shared wInit vector.
-   * Here we perform coordinate updates for the SVM dual objective (hinge loss).
+   * Here we perform coordinate updates for the square loss dual objective. Note that 
+   * this is different then the original CoCoa paper which uses the dual SVM (hinge)
+   * loss.
    *
-   * Note that SDCA for hinge-loss is equivalent to LibLinear, where using the
-   * regularization parameter  C = 1.0/(lambda*numExamples), and re-scaling
-   * the alpha variables with 1/C.
    *
    * @param localData The local data examples
    * @param wInit
