@@ -256,19 +256,11 @@ object MiniBatchSGDwithL2 extends Logging {
     def calculate(weights: DenseVector[Double]): (Double, DenseVector[Double]) = {
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
-      //val bcW = dataMat.context.broadcast(weightsMat)
-      //val localColMeansBC = dataMat.context.broadcast(dataColMeans)
+      val bcW = dataMat.context.broadcast(weightsMat)
+      val localColMeansBC = dataMat.context.broadcast(dataColMeans)
       val localGradient = gradient
       val localMiniBatchFraction = miniBatchFraction
-
-
-      val treeReduceInput = dataMat.zip(labelsMat).map { x => localGradient.compute(x._1,
-        DenseVector.rand(numFeatures), x._2,
-        DenseMatrix.rand(numFeatures, numClasses), localMiniBatchFraction)}
-     
-      val gradientSum = weightsMat //dummy variable
-      val lossSum = 0
-      /*
+      
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, x._2,
             bcW.value, localMiniBatchFraction)
@@ -277,15 +269,15 @@ object MiniBatchSGDwithL2 extends Logging {
           (a._1, a._2 + b._2)
         }
       )
-    */
+    
 
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val normWSquared = math.pow(norm(weights), 2)
       val regVal = 0.5 * regParam * normWSquared
       val loss = lossSum / math.ceil(numExamples * miniBatchFraction) + regVal
 
-      //localColMeansBC.destroy()
-      //bcW.destroy()
+      localColMeansBC.destroy()
+      bcW.destroy()
 
       // total gradient = gradSum / nTrain + lambda * w
       val gradientTotal = gradientSum / math.ceil(numExamples * miniBatchFraction) + (weightsMat * regParam)
