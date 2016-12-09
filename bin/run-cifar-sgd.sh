@@ -13,10 +13,11 @@ export MEM=180g
 MASTER=`cat /root/spark-ec2/cluster-url`
 CLASS=CifarRandomFeatLBFGS
 
-CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip"
-CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip"
+CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip/part-0000{0-7}"
+CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip/part-0000{0-7}"
 
-NUM_PARTITIONS=1024
+#NUM_PARTITIONS=1024
+NUM_PARTITIONS=8
 LAMBDAS=1e-6
 NUM_ITERS=500
 NUM_COSINES=202752
@@ -30,7 +31,10 @@ STEP_SIZE=1e-3
 SGD_DAMPEN=0.95
 MINI_BATCH_FRACTION=0.1
 COCOA_BETA=1.0
+COCOA_GAMMA=3e-3
+COCOA_PLUS="true"
 COCOA_LOCAL_ITERS=1.0
+NORM_ROWS="false"
 
 export EXECUTOR_OMP_NUM_THREADS=1
 
@@ -49,7 +53,9 @@ OMP_NUM_THREADS=1 KEYSTONE_MEM=180g ./bin/run-pipeline.sh \
   --sgdDampen $SGD_DAMPEN \
   --stepSize $STEP_SIZE \
   --cocoaBeta $COCOA_BETA \
+  --cocoaGamma $COCOA_GAMMA \
+  --cocoaPlus $COCOA_PLUS \
   --cocoaLocalItersFraction $COCOA_LOCAL_ITERS \
   --miniBatchFraction $MINI_BATCH_FRACTION \
-  --seed $SEED 2>&1 | tee /root/logs/cifar-512-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-step-$STEP_SIZE-mini-$MINI_BATCH_FRACTION-dampen-$SGD_DAMPEN-logs-"$LOG_SUFFIX".log
+  --seed $SEED 2>&1 | tee /root/logs/cifar-512-subset-solver-$SOLVER-gamma-$GAMMA-lambda-$LAMBDAS-numIter-$NUM_ITERS-numCosine-$NUM_COSINES-step-$STEP_SIZE-mini-$MINI_BATCH_FRACTION-dampen-$SGD_DAMPEN-logs-"$LOG_SUFFIX".log
 
