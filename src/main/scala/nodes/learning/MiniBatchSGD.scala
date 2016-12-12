@@ -259,15 +259,30 @@ object MiniBatchSGDwithL2 extends Logging {
       //val bcW = dataMat.context.broadcast(weightsMat)
       //val localColMeansBC = dataMat.context.broadcast(dataColMeans)
       val localGradient = gradient
+      val localNumFeatures = numFeatures
+      val localNumClasses = numClasses
       val localMiniBatchFraction = miniBatchFraction
 
 
-      val treeReduceInput = dataMat.zip(labelsMat).map { x => localGradient.compute(x._1,
-        DenseVector.rand(numFeatures), x._2,
-        DenseMatrix.rand(numFeatures, numClasses), localMiniBatchFraction)}
-     
-      val gradientSum = weightsMat //dummy variable
+      val treeReduceInput: RDD[GradientResult] = dataMat.zip(labelsMat).map { x => localGradient.compute(x._1,
+          DenseVector.rand(localNumFeatures), x._2,
+          DenseMatrix.rand(localNumFeatures, localNumClasses), localMiniBatchFraction)}
+      treeReduceInput.count 
+      
+      val gradientSum = DenseMatrix.rand(numFeatures, numClasses) //dummy variable
       val lossSum = 0
+      
+      /*
+      val timingResult = treeReduceInput.zipWithIndex.map{ case (y, idx) =>
+        val sampleTime = y.time._1
+        val linalgTime = y.time._2
+        println("Partition: " + idx + " sampleTime: " + sampleTime + " linalgTime: " + linalgTime)
+        (sampleTime, linalgTime)
+      }.reduce((a: (Long, Long), b: (Long, Long)) => (a._1 + b._1, a._2 + b._2 ))
+      println("SAMPLE_TIME_" + timingResult._1)
+      println("LINALG_TIME_" + timingResult._2)
+      */
+     
       /*
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, x._2,

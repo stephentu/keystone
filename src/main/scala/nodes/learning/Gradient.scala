@@ -119,6 +119,10 @@ class LeastSquaresSparseGradient extends SparseGradient {
 }
 
 
+case class GradientResult(gradient: DenseMatrix[Double],
+                          loss: Double, 
+                          time: (Long, Long) = (0L,0L)) extends Serializable
+
 trait BatchGradient extends Serializable {
   
   def compute(
@@ -126,8 +130,7 @@ trait BatchGradient extends Serializable {
       dataColMeans: DenseVector[Double],
       labels: DenseMatrix[Double],
       weights: DenseMatrix[Double],
-      miniBatchFraction: Double = 1.0)
-    : (DenseMatrix[Double], Double)
+      miniBatchFraction: Double = 1.0): GradientResult
 }
 
 class LeastSquaresBatchGradient extends BatchGradient {
@@ -147,13 +150,20 @@ class LeastSquaresBatchGradient extends BatchGradient {
       labels: DenseMatrix[Double],
       weights: DenseMatrix[Double],
       miniBatchFraction: Double = 1.0)
-    : (DenseMatrix[Double], Double) = {
+    : GradientResult = {
 
+    var sampleTime = 0L
     val (dataSample, labelsSample) = if (miniBatchFraction == 1.0) {
       (data, labels)
     } else {
-      sampleRows(data, labels, miniBatchFraction)
+      val sampleTimeBegin = System.nanoTime
+      val sampledRows = sampleRows(data, labels, miniBatchFraction)
+      sampleTime = System.nanoTime - sampleTimeBegin
+      //println("SAMPLE_TIME_" + sampleTime)
+      sampledRows
     }
+
+    val linalgTimeBegin = System.nanoTime
 
     // Least Squares Gradient is At.(Ax - b)
     val axb: DenseMatrix[Double] = (dataSample * weights)
@@ -164,8 +174,14 @@ class LeastSquaresBatchGradient extends BatchGradient {
     val grad = dataSample.t * (axb)
     // Loss is 0.5 * norm(Ax - b)
     val loss = 0.5 * math.pow(norm(axb.toDenseVector), 2)
+    
+    val linalgTime = System.nanoTime - linalgTimeBegin
 
-    (grad, loss)
+    GradientResult(grad, loss, (sampleTime, linalgTime))
   }
 
 }
+
+
+
+

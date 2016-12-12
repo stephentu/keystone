@@ -242,13 +242,15 @@ object BatchLBFGSwithL2 extends Logging {
 			val localColMeansBC = dataMat.context.broadcast(dataColMeans)
       val localGradient = gradient
 
-      val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
+      val gradResult = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, x._2, bcW.value)
-        }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => { 
-          a._1 += b._1
-          (a._1, a._2 + b._2)
+        }, (a: GradientResult, b: GradientResult) => { 
+          a.gradient += b.gradient
+          GradientResult(a.gradient, a.loss + b.loss) 
         }
       )
+      val gradientSum = gradResult.gradient
+      val lossSum = gradResult.loss
 
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val normWSquared = math.pow(norm(weights), 2)

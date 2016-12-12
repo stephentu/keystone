@@ -13,8 +13,8 @@ export MEM=180g
 MASTER=`cat /root/spark-ec2/cluster-url`
 CLASS=CifarRandomFeatLBFGS
 
-CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip/part-0000{0-7}"
-CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip/part-0000{0-7}"
+CIFAR_TRAIN_DIR="s3n://cifar-augmented/cifar_train_featurized_augmented_512_flip_subset/"
+CIFAR_TEST_DIR="s3n://cifar-augmented/cifar_test_featurized_augmented_512_flip_subset/"
 
 #NUM_PARTITIONS=1024
 NUM_PARTITIONS=8
