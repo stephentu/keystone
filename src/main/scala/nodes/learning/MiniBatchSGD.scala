@@ -269,19 +269,17 @@ object MiniBatchSGDwithL2 extends Logging {
           DenseMatrix.rand(localNumFeatures, localNumClasses), localMiniBatchFraction)}
       treeReduceInput.count 
       
-      val gradientSum = DenseMatrix.rand(numFeatures, numClasses) //dummy variable
+      val gradientSum = DenseMatrix.zeros[Double](numFeatures, numClasses) //dummy variable
       val lossSum = 0
       
-      /*
-      val timingResult = treeReduceInput.zipWithIndex.map{ case (y, idx) =>
+      val timingResult = MLMatrixUtils.treeReduce(treeReduceInput.zipWithIndex.map{ case (y, idx) =>
         val sampleTime = y.time._1
         val linalgTime = y.time._2
         println("Partition: " + idx + " sampleTime: " + sampleTime + " linalgTime: " + linalgTime)
         (sampleTime, linalgTime)
-      }.reduce((a: (Long, Long), b: (Long, Long)) => (a._1 + b._1, a._2 + b._2 ))
+      }, (a: (Long, Long), b: (Long, Long)) => (a._1 + b._1, a._2 + b._2 ))
       println("SAMPLE_TIME_" + timingResult._1)
       println("LINALG_TIME_" + timingResult._2)
-      */
      
       /*
       val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
@@ -293,17 +291,20 @@ object MiniBatchSGDwithL2 extends Logging {
         }
       )
     */
-
+     
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
+      val localComputeTimeBegin = System.nanoTime
       val normWSquared = math.pow(norm(weights), 2)
       val regVal = 0.5 * regParam * normWSquared
       val loss = lossSum / math.ceil(numExamples * miniBatchFraction) + regVal
 
-      //localColMeansBC.destroy()
-      //bcW.destroy()
-
       // total gradient = gradSum / nTrain + lambda * w
       val gradientTotal = gradientSum / math.ceil(numExamples * miniBatchFraction) + (weightsMat * regParam)
+      val localComputeTime = System.nanoTime - localComputeTimeBegin
+      println("LOCAL_COMPUTE_TIME_" + localComputeTime)
+      
+      //localColMeansBC.destroy()
+      //bcW.destroy()
 
       (loss, gradientTotal.toDenseVector)
     }
