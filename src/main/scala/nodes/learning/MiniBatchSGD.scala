@@ -188,13 +188,12 @@ object MiniBatchSGDwithL2 extends Logging {
       // NOTE: Since we included the regularization term in the computation of
       // gradient, we only need to do this here.
       currentWeights = prevWeights - thisIterStepSize * gradient
-
+      val iterTime = System.nanoTime - iterBegin
       println("For iter " + iter + " step size " + thisIterStepSize)
       println("For iter " + iter + " loss is " + loss)
       println("For iter " + iter + " grad norm is " + norm(gradient))
       println("For iter " + iter + " x norm " + norm(prevWeights))
       println("For iter " + iter + " new x norm " + norm(currentWeights))
-      val iterTime = System.nanoTime - iterBegin
       println("iter_" + iter + "_time: " + iterTime)
       if (!epochCallback.isEmpty && (epochEveryTest == 1 || iter % epochEveryTest == 1)) {
         val weights = currentWeights.asDenseMatrix.reshape(numFeatures, numClasses)
@@ -254,6 +253,7 @@ object MiniBatchSGDwithL2 extends Logging {
     }
 
     def calculate(weights: DenseVector[Double]): (Double, DenseVector[Double]) = {
+
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
       //val bcW = dataMat.context.broadcast(weightsMat)
@@ -263,15 +263,18 @@ object MiniBatchSGDwithL2 extends Logging {
       val localNumClasses = numClasses
       val localMiniBatchFraction = miniBatchFraction
 
-
+      
+      val treeReduceInputTimeBegin = System.nanoTime
       val treeReduceInput: RDD[GradientResult] = dataMat.zip(labelsMat).map { x => localGradient.compute(x._1,
           DenseVector.rand(localNumFeatures), x._2,
           DenseMatrix.rand(localNumFeatures, localNumClasses), localMiniBatchFraction)}
-      treeReduceInput.count 
-      
+      treeReduceInput.count
+      val treeReduceInputTime = System.nanoTime - treeReduceInputTimeBegin
+      println("GRADIENT_REDUCE_INPUT_TIME_" + treeReduceInputTime)
       val gradientSum = DenseMatrix.zeros[Double](numFeatures, numClasses) //dummy variable
       val lossSum = 0
-      
+     
+      /*
       val timingResult = MLMatrixUtils.treeReduce(treeReduceInput.zipWithIndex.map{ case (y, idx) =>
         val sampleTime = y.time._1
         val linalgTime = y.time._2
@@ -280,9 +283,10 @@ object MiniBatchSGDwithL2 extends Logging {
       }, (a: (Long, Long), b: (Long, Long)) => (a._1 + b._1, a._2 + b._2 ))
       println("SAMPLE_TIME_" + timingResult._1)
       println("LINALG_TIME_" + timingResult._2)
-     
-      /*
-      val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
+     */
+
+      
+      /*val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, x._2,
             bcW.value, localMiniBatchFraction)
         }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => {
@@ -291,6 +295,7 @@ object MiniBatchSGDwithL2 extends Logging {
         }
       )
     */
+    
      
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val localComputeTimeBegin = System.nanoTime

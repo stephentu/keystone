@@ -79,22 +79,11 @@ object LBFGSwithL2 extends Logging {
     override def calculate(weights: DenseVector[Double]): (Double, DenseVector[Double]) = {
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
-      //val bcW = data.context.broadcast(weightsMat)
+      val bcW = data.context.broadcast(weightsMat)
       val localGradient = gradient
       val localNumFeatures = numFeatures
       val localNumClasses = numClasses
 
-      val partitionGradientLosses = data.zipPartitions(labels) {
-        (partitionFeatures, partitionLabels) =>
-          Iterator.single(localGradient.compute(
-            localNumFeatures,
-            localNumClasses,
-            partitionFeatures,
-            partitionLabels,
-            DenseMatrix.rand(localNumFeatures, localNumClasses)))
-      }.count
-
-      /*
       val partitionGradientLosses = data.zipPartitions(labels) {
         (partitionFeatures, partitionLabels) =>
           Iterator.single(localGradient.compute(
@@ -112,9 +101,6 @@ object LBFGSwithL2 extends Logging {
           (a._1, a._2 + b._2)
         }
       )
-    */
-      val gradientSum = DenseMatrix.rand(localNumFeatures, localNumClasses)
-      val lossSum = 0
 
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val normWSquared = if (weightsIncludeBias) {
@@ -129,7 +115,7 @@ object LBFGSwithL2 extends Logging {
 
       // total gradient = gradSum / nTrain + lambda * w
       val gradientTotal = gradientSum / numExamples.toDouble +  (weightsMat * regParam)
-
+      bcW.destroy()
       (loss, gradientTotal.toDenseVector)
     }
   }

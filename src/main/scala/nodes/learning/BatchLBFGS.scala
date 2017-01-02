@@ -236,33 +236,58 @@ object BatchLBFGSwithL2 extends Logging {
     numClasses: Int) extends DiffFunction[DenseVector[Double]] {
 
     override def calculate(weights: DenseVector[Double]): (Double, DenseVector[Double]) = {
+      val totalGradTimeBegin = System.nanoTime
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
       val bcW = dataMat.context.broadcast(weightsMat)
 			val localColMeansBC = dataMat.context.broadcast(dataColMeans)
       val localGradient = gradient
+      val localNumFeatures = numFeatures
+      val localNumClasses = numClasses
+      
+      val treeReduceInput = dataMat.zip(labelsMat).map { x =>
+        localGradient.compute(x._1, localColMeansBC.value, x._2, bcW.value)
+      }
+      treeReduceInput.count
+      //val gradientSum = DenseMatrix.zeros[Double](numFeatures, numClasses)
+      //val lossSum = 0
 
-      val gradResult = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
-          localGradient.compute(x._1, localColMeansBC.value, x._2, bcW.value)
-        }, (a: GradientResult, b: GradientResult) => { 
+      val timingResult = MLMatrixUtils.treeReduce(treeReduceInput.zipWithIndex.map{ case (y, idx) =>
+        val sampleTime = y.time._1
+        val linalgTime = y.time._2
+        println("Partition: " + idx + " sampleTime: " + sampleTime + " linalgTime: " + linalgTime)
+        (sampleTime, linalgTime)
+      }, (a: (Long, Long), b: (Long, Long)) => (a._1 + b._1, a._2 + b._2 ))
+      println("SAMPLE_TIME_" + timingResult._1)
+      println("LINALG_TIME_" + timingResult._2)
+
+      val treeReduceTimeBegin = System.nanoTime
+      val gradResult = MLMatrixUtils.treeReduce(treeReduceInput, 
+        (a: GradientResult, b: GradientResult) => { 
           a.gradient += b.gradient
           GradientResult(a.gradient, a.loss + b.loss) 
         }
       )
+      val treeReduceTime = System.nanoTime - treeReduceTimeBegin
+      println("GRADIENT_REDUCE_TIME_" + treeReduceTime)
+
+      val localGradComputeTimeBegin = System.nanoTime
       val gradientSum = gradResult.gradient
       val lossSum = gradResult.loss
-
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val normWSquared = math.pow(norm(weights), 2)
       val regVal = 0.5 * regParam * normWSquared
       val loss = lossSum / numExamples + regVal
+      // total gradient = gradSum / nTrain + lambda * w
+      val gradientTotal = gradientSum / numExamples.toDouble + (weightsMat * regParam)
+      val localGradComputeTime = System.nanoTime - localGradComputeTimeBegin
+      println("LOCAL_GRAD_COMPUTE_TIME_" + localGradComputeTime)
 
       localColMeansBC.destroy()
       bcW.destroy()
-
-      // total gradient = gradSum / nTrain + lambda * w
-      val gradientTotal = gradientSum / numExamples.toDouble + (weightsMat * regParam)
-
+      val totalGradTime = System.nanoTime - totalGradTimeBegin
+      println("TOTAL_GRAD_TIME_" + totalGradTime)
+      
       (loss, gradientTotal.toDenseVector)
     }
   }

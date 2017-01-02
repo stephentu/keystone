@@ -139,9 +139,20 @@ class LeastSquaresBatchGradient extends BatchGradient {
     val numRowsToKeep = math.ceil(data.rows * sampleFraction).toInt
     val arr = (0 until data.rows).iterator
     // smapl
+    
+    val beginArrShuffleTime = System.nanoTime
     val rowsToKeep = scala.util.Random.shuffle(arr).take(numRowsToKeep).toSeq
+    val arrShuffleTime = System.nanoTime - beginArrShuffleTime
+    println("ARRAY_SHUFFLE_TIME_" + arrShuffleTime)
+
+    val beginDataAccessTime = System.nanoTime
+    val dataOut = data(rowsToKeep, ::).toDenseMatrix
+    val labelsOut = labels(rowsToKeep, ::).toDenseMatrix
+    val dataAccessTime = System.nanoTime - beginDataAccessTime
+    println("DATA_ACCESS_TIME_" + dataAccessTime)
+
     // NOTE: This makes a copy ?
-    (data(rowsToKeep, ::).toDenseMatrix, labels(rowsToKeep, ::).toDenseMatrix)
+    (dataOut, labelsOut)
   }
 
   def compute(
@@ -159,7 +170,7 @@ class LeastSquaresBatchGradient extends BatchGradient {
       val sampleTimeBegin = System.nanoTime
       val sampledRows = sampleRows(data, labels, miniBatchFraction)
       sampleTime = System.nanoTime - sampleTimeBegin
-      //println("SAMPLE_TIME_" + sampleTime)
+      println("WORKER_SAMPLE_TIME_" + sampleTime)
       sampledRows
     }
 
@@ -176,7 +187,7 @@ class LeastSquaresBatchGradient extends BatchGradient {
     val loss = 0.5 * math.pow(norm(axb.toDenseVector), 2)
     
     val linalgTime = System.nanoTime - linalgTimeBegin
-
+    println("WORKER_LINALG_TIME_" + linalgTime)
     GradientResult(grad, loss, (sampleTime, linalgTime))
   }
 
