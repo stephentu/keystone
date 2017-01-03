@@ -244,7 +244,15 @@ object BatchLBFGSwithL2 extends Logging {
       val localGradient = gradient
       val localNumFeatures = numFeatures
       val localNumClasses = numClasses
-      
+      val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
+          localGradient.compute(x._1, localColMeansBC.value, x._2, bcW.value)
+        }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => { 
+            a._1 += b._1
+            (a._1, a._2 + b._2)
+        }
+      )
+
+/*
       val treeReduceInput = dataMat.zip(labelsMat).map { x =>
         localGradient.compute(x._1, localColMeansBC.value, x._2, bcW.value)
       }
@@ -270,10 +278,9 @@ object BatchLBFGSwithL2 extends Logging {
       )
       val treeReduceTime = System.nanoTime - treeReduceTimeBegin
       println("GRADIENT_REDUCE_TIME_" + treeReduceTime)
+*/
 
       val localGradComputeTimeBegin = System.nanoTime
-      val gradientSum = gradResult.gradient
-      val lossSum = gradResult.loss
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val normWSquared = math.pow(norm(weights), 2)
       val regVal = 0.5 * regParam * normWSquared

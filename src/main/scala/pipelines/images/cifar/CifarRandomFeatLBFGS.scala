@@ -133,6 +133,15 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     trainFeats.count
 
+    val trainFeatsParts = trainFeats.collect()
+    val trainFeatsMat: DenseMatrix[Double] =  DenseMatrix.vertcat(trainFeatsParts:_*)
+
+    val trainFeatsMatRegularized = DenseMatrix.vertcat(trainFeatsMat,
+       DenseMatrix.eye[Double](trainFeatsMat.cols):*math.sqrt(conf.lambda))
+    val singularValues = svd(trainFeatsMatRegularized).S
+    println("Largest singular value is ", singularValues(0))
+    println("Smallest singular value is ", singularValues(-1))
+
     val testFeatsRaw = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     // .mapPartitions { itr =>
     //   if (itr.hasNext) {

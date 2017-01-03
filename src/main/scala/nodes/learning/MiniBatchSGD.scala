@@ -256,14 +256,15 @@ object MiniBatchSGDwithL2 extends Logging {
 
       val weightsMat = weights.asDenseMatrix.reshape(numFeatures, numClasses)
       // Have a local copy to avoid the serialization of CostFun object which is not serializable.
-      //val bcW = dataMat.context.broadcast(weightsMat)
-      //val localColMeansBC = dataMat.context.broadcast(dataColMeans)
+      val bcW = dataMat.context.broadcast(weightsMat)
+      val localColMeansBC = dataMat.context.broadcast(dataColMeans)
       val localGradient = gradient
       val localNumFeatures = numFeatures
       val localNumClasses = numClasses
       val localMiniBatchFraction = miniBatchFraction
 
-      
+     
+      /*
       val treeReduceInputTimeBegin = System.nanoTime
       val treeReduceInput: RDD[GradientResult] = dataMat.zip(labelsMat).map { x => localGradient.compute(x._1,
           DenseVector.rand(localNumFeatures), x._2,
@@ -274,7 +275,6 @@ object MiniBatchSGDwithL2 extends Logging {
       val gradientSum = DenseMatrix.zeros[Double](numFeatures, numClasses) //dummy variable
       val lossSum = 0
      
-      /*
       val timingResult = MLMatrixUtils.treeReduce(treeReduceInput.zipWithIndex.map{ case (y, idx) =>
         val sampleTime = y.time._1
         val linalgTime = y.time._2
@@ -285,8 +285,8 @@ object MiniBatchSGDwithL2 extends Logging {
       println("LINALG_TIME_" + timingResult._2)
      */
 
-      
-      /*val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
+
+      val (gradientSum, lossSum) = MLMatrixUtils.treeReduce(dataMat.zip(labelsMat).map { x =>
           localGradient.compute(x._1, localColMeansBC.value, x._2,
             bcW.value, localMiniBatchFraction)
         }, (a: (DenseMatrix[Double], Double), b: (DenseMatrix[Double], Double)) => {
@@ -294,8 +294,6 @@ object MiniBatchSGDwithL2 extends Logging {
           (a._1, a._2 + b._2)
         }
       )
-    */
-    
      
       // total loss = lossSum / nTrain + 1/2 * lambda * norm(W)^2
       val localComputeTimeBegin = System.nanoTime
@@ -308,8 +306,8 @@ object MiniBatchSGDwithL2 extends Logging {
       val localComputeTime = System.nanoTime - localComputeTimeBegin
       println("LOCAL_COMPUTE_TIME_" + localComputeTime)
       
-      //localColMeansBC.destroy()
-      //bcW.destroy()
+      localColMeansBC.destroy()
+      bcW.destroy()
 
       (loss, gradientTotal.toDenseVector)
     }

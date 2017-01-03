@@ -118,7 +118,7 @@ class LeastSquaresSparseGradient extends SparseGradient {
   }
 }
 
-
+/*
 case class GradientResult(gradient: DenseMatrix[Double],
                           loss: Double, 
                           time: (Long, Long) = (0L,0L)) extends Serializable
@@ -138,18 +138,17 @@ class LeastSquaresBatchGradient extends BatchGradient {
   def sampleRows(data: DenseMatrix[Double], labels: DenseMatrix[Double], sampleFraction: Double) = {
     val numRowsToKeep = math.ceil(data.rows * sampleFraction).toInt
     val arr = (0 until data.rows).iterator
-    // smapl
     
-    val beginArrShuffleTime = System.nanoTime
+    //val beginArrShuffleTime = System.nanoTime
     val rowsToKeep = scala.util.Random.shuffle(arr).take(numRowsToKeep).toSeq
-    val arrShuffleTime = System.nanoTime - beginArrShuffleTime
-    println("ARRAY_SHUFFLE_TIME_" + arrShuffleTime)
+    //val arrShuffleTime = System.nanoTime - beginArrShuffleTime
+    //println("ARRAY_SHUFFLE_TIME_" + arrShuffleTime)
 
-    val beginDataAccessTime = System.nanoTime
+    //val beginDataAccessTime = System.nanoTime
     val dataOut = data(rowsToKeep, ::).toDenseMatrix
     val labelsOut = labels(rowsToKeep, ::).toDenseMatrix
-    val dataAccessTime = System.nanoTime - beginDataAccessTime
-    println("DATA_ACCESS_TIME_" + dataAccessTime)
+    //val dataAccessTime = System.nanoTime - beginDataAccessTime
+    //println("DATA_ACCESS_TIME_" + dataAccessTime)
 
     // NOTE: This makes a copy ?
     (dataOut, labelsOut)
@@ -190,9 +189,54 @@ class LeastSquaresBatchGradient extends BatchGradient {
     println("WORKER_LINALG_TIME_" + linalgTime)
     GradientResult(grad, loss, (sampleTime, linalgTime))
   }
+*/
 
+trait BatchGradient extends Serializable {
+  
+  def compute(
+      data: DenseMatrix[Double],
+      dataColMeans: DenseVector[Double],
+      labels: DenseMatrix[Double],
+      weights: DenseMatrix[Double],
+      miniBatchFraction: Double = 1.0)
+    : (DenseMatrix[Double], Double)
 }
 
+class LeastSquaresBatchGradient extends BatchGradient {
 
+  def sampleRows(data: DenseMatrix[Double], labels: DenseMatrix[Double], sampleFraction: Double) = {
+    val numRowsToKeep = math.ceil(data.rows * sampleFraction).toInt
+    val arr = (0 until data.rows).iterator
+    // smapl
+    val rowsToKeep = scala.util.Random.shuffle(arr).take(numRowsToKeep).toSeq
+    // NOTE: This makes a copy ?
+    (data(rowsToKeep, ::).toDenseMatrix, labels(rowsToKeep, ::).toDenseMatrix)
+  }
 
+  def compute(
+      data: DenseMatrix[Double],
+      dataColMeans: DenseVector[Double],
+      labels: DenseMatrix[Double],
+      weights: DenseMatrix[Double],
+      miniBatchFraction: Double = 1.0)
+    : (DenseMatrix[Double], Double) = {
+
+    val (dataSample, labelsSample) = if (miniBatchFraction == 1.0) {
+      (data, labels)
+    } else {
+      sampleRows(data, labels, miniBatchFraction)
+    }
+
+    // Least Squares Gradient is At.(Ax - b)
+    val axb: DenseMatrix[Double] = (dataSample * weights)
+    val meanTerm = (dataColMeans.t * weights).t
+    axb(*, ::) -= meanTerm
+    axb -= labelsSample
+
+    val grad = dataSample.t * (axb)
+    // Loss is 0.5 * norm(Ax - b)
+    val loss = 0.5 * math.pow(norm(axb.toDenseVector), 2)
+    (grad, loss)
+  }
+}
 
