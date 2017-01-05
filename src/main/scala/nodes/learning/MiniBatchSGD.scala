@@ -173,6 +173,32 @@ object MiniBatchSGDwithL2 extends Logging {
      * NOTE: lossSum and loss is computed using the weights from the previous iteration
      * and regVal is the regularization value computed in the previous iteration as well.
      */
+    
+    val A_parts = data.collect()
+    val A_local = DenseMatrix.vertcat(A_parts:_*)
+    
+    val b_parts = labelsMat.collect()
+    val b_local = DenseMatrix.vertcat(b_parts:_*)
+    
+    val featuresMean = mean(A_local(::, *)).toDenseVector
+    val A_zm = A_local(*, ::) - featuresMean
+
+    val AAt = A_zm*A_zm.t
+    val model = A_zm.t*( (AAt + (DenseMatrix.eye[Double](AAt.rows):*regParam)) \ b_local)
+    val norm_model_squared = norm(model.toDenseVector)*norm(model.toDenseVector)
+    println("first norm model ", norm_model_squared)
+
+    val lam_eye = DenseMatrix.eye[Double](numFeatures):*math.sqrt(regParam)
+    val a_regularized = DenseMatrix.vertcat(A_local, lam_eye)
+    val b_augmented = DenseMatrix.vertcat(b_local, DenseMatrix.zeros[Double](numFeatures, numClasses))
+    
+    val second_model = a_regularized \ b_augmented
+    val norm_other_model_squared = norm(second_model.toDenseVector)*norm(second_model.toDenseVector)
+    println("second norm model is  ", norm_other_model_squared)
+  
+    val third_model = (A_zm.t*A_zm + (DenseMatrix.eye[Double](AAt.rows):*regParam)) \ (A_zm.t*b_local)
+    println("norm third model is ", norm(third_model.toDenseVector)*norm(third_model.toDenseVector))
+    
     var prevWeights = null
     var currentWeights = initialWeights
     var currentLoss = 0.0
@@ -194,6 +220,11 @@ object MiniBatchSGDwithL2 extends Logging {
       println("For iter " + iter + " grad norm is " + norm(gradient))
       println("For iter " + iter + " x norm " + norm(prevWeights))
       println("For iter " + iter + " new x norm " + norm(currentWeights))
+      val diff_one = currentWeights - model.toDenseVector
+      val diff_two = currentWeights - second_model.toDenseVector
+      val diff_three = currentWeights - third_model.toDenseVector
+      println("PROGRESS_" + norm(diff_one)*norm(diff_one) + "_" + norm(diff_two)*norm(diff_two) + "_" + norm(diff_three)*norm(diff_three))
+
       println("iter_" + iter + "_time: " + iterTime)
       if (!epochCallback.isEmpty && (epochEveryTest == 1 || iter % epochEveryTest == 1)) {
         val weights = currentWeights.asDenseMatrix.reshape(numFeatures, numClasses)

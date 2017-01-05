@@ -133,14 +133,7 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val trainFeats = randomCosineFeaturize(train.data, conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     trainFeats.count
 
-    val trainFeatsParts = trainFeats.collect()
-    val trainFeatsMat: DenseMatrix[Double] =  DenseMatrix.vertcat(trainFeatsParts:_*)
 
-    val trainFeatsMatRegularized = DenseMatrix.vertcat(trainFeatsMat,
-       DenseMatrix.eye[Double](trainFeatsMat.cols):*math.sqrt(conf.lambda))
-    val singularValues = svd(trainFeatsMatRegularized).S
-    println("Largest singular value is ", singularValues(0))
-    println("Smallest singular value is ", singularValues(-1))
 
     val testFeatsRaw = randomCosineFeaturize(testAll.map(_._3), conf.seed, numInputFeats, conf.numCosineFeatures, conf.cosineGamma)
     // .mapPartitions { itr =>
@@ -160,6 +153,26 @@ object CifarRandomFeatLBFGS extends Serializable with Logging {
     val featTime = System.nanoTime()
     println(s"TIME_FEATURIZATION_${(featTime-startTime)/1e9}")
 
+    val trainFeatsParts = trainFeats.collect()
+    val trainFeatsMat = DenseMatrix.vertcat(trainFeatsParts:_*)
+    println("trainFeats Mat rows", trainFeatsMat.rows)
+    println("trainFeatsMat cols", trainFeatsMat.cols)
+    
+    val lam_eye = DenseMatrix.eye[Double](conf.numCosineFeatures):*math.sqrt(conf.lambda)
+    val trainFeatsMatRegularized = DenseMatrix.vertcat(trainFeatsMat, lam_eye)
+    val singularValues = svd(trainFeatsMatRegularized).S
+    println("Largest singular value is ", singularValues(0))
+    println("Smallest singular value is ", singularValues(-1))
+    
+    val trainLabelParts = trainLabels.collect()
+    val b_local = DenseMatrix.vertcat(trainLabelParts:_*)
+    
+    val AAt = trainFeatsMat * trainFeatsMat.t
+    val model = trainFeatsMat.t*( (AAt + (DenseMatrix.eye[Double](AAt.rows):*conf.lambda)) \ b_local)
+    val norm_model_squared = norm(model.toDenseVector)*norm(model.toDenseVector)
+    println("d_0 is ", norm_model_squared)
+    
+    
     if (conf.solver == "lbfgs") {
       val testFeats = testFeatsRaw
       val testCbBound = testCb(testAll.map(_._1), testFeats, testAll.map(_._2), numClasses, _: LinearMapper[DenseVector[Double]])
